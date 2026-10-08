@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shlex
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -98,7 +99,7 @@ def record(cases: list[Case], state_root: Path, output: str, where: str, log: Pa
     case = Case(
         id=f"LOCAL-{digest}",
         match=pattern,
-        fix=f"less +G {log}",
+        fix=f"less +G {shlex.quote(str(log))}",
         meaning=f"first seen {datetime.now().astimezone().date().isoformat()} in {where}: {line}",
         seen=1,
     )

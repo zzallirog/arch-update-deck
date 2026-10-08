@@ -1,0 +1,14 @@
+ UPDATE DAY                                                                         Thu 08.10 04:09 
+
+ PACKAGE           INSTALLED    AVAILABLE    FROM
+ zen-browser-bin   1.23b-1      1.23.1b-1    REPO
+ discord-canary    1.0.2139-1   1.0.2140-1   AUR · BY HAND
+
+ TOTAL    1 from repositories · 1 from AUR (by hand: yay -Sua)
+
+ MACHINE  fine · 8 checks
+ PENDING  nothing since last time
+
+ UPDATE NOW?  [y] yes   [N] not now   Enter means no
+
+ l last run · k kernel

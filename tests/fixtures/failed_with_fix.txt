@@ -1,0 +1,10 @@
+ UPDATE DAY                                                                         Thu 08.10 04:09 
+
+ checking   machine is fine
+ updating   repositories  failed · 0 changed
+
+ nothing was changed
+ repositories: error: unresolvable package conflicts detected
+   fix: grep -h "in conflict" ~/.local/state/arch-updater/runs/*/run.log | tail -n 3
+
+ FAILED   [Enter] close

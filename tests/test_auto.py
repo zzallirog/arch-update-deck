@@ -5,6 +5,7 @@ The real probes, stores, repairs and census run; only the Shell is replaced.
 
 import fcntl
 import itertools
+import signal
 import json
 import subprocess
 import time
@@ -15,6 +16,7 @@ import pytest
 
 from arch_updater import auto, census, exits, repairs, scheduler, stores, watch
 from arch_updater.shell import Shell
+from arch_updater.textsafe import cause
 
 UPGRADE = ["sudo", "-n", "pacman", "-Syu", "--noconfirm"]
 NOT_FOUND = "error: failed retrieving file 'x' : The requested URL returned error: 404"
@@ -50,6 +52,8 @@ class Machine(Shell):
         self.dns = True
         self.free = 100 * 1024**3
         self.aur = {"type": "multiinfo", "results": []}
+        self.typed: list[list[str]] = []  # commands handed the person's own terminal (a password prompt)
+        self.typed_status = 0
 
     def has(self, tool):
         return tool in self.tools
@@ -68,6 +72,10 @@ class Machine(Shell):
         if argv == ["pacman", "-Qqm"]:
             return ok("old\nnew\n")
         return ok("\n".join(self.packages) + "\n") if argv[:2] == ["pacman", "-Q"] else ok()
+
+    def interactive(self, argv):
+        self.typed.append(list(argv))
+        return self.typed_status
 
     def logged(self, argv, log, timeout=0):
         self.ran.append(list(argv))
@@ -124,6 +132,58 @@ def test_every_case_names_a_repair_that_exists_and_a_command_for_a_human(tmp_pat
     for case in census.load(tmp_path):
         assert case.fix, f"{case.id} has no command for a human"
         assert case.repair is None or case.repair in repairs.ACTIONS, f"{case.id} names an unknown repair"
+
+
+def test_no_fix_is_the_command_that_just_failed(tmp_path) -> None:
+    """A fix that repeats the store's own command is no way forward: the same update fails the same way."""
+    commands = {" ".join(store.update[:2]) for store in stores.STORES} | {"yay -Sua", "arch-update auto"}
+    for case in census.load(tmp_path):
+        assert case.fix.removeprefix("sudo ") not in commands, f"{case.id}: its fix is the command that fails ({case.fix})"
+
+
+def test_every_fix_is_one_printable_command_the_shell_can_read(tmp_path) -> None:
+    for case in census.load(tmp_path):
+        assert "\n" not in case.fix and "<" not in case.fix, f"{case.id}: one line, no placeholder"
+        assert subprocess.run(["sh", "-n", "-c", case.fix], capture_output=True).returncode == 0, f"{case.id}: {case.fix}"
+
+
+def test_the_sudoers_fix_installs_through_a_temporary_file_checked_by_visudo(tmp_path) -> None:
+    for name in ("NO-ROOT", "SUDO-TIMESTAMP-EXPIRED"):
+        fix = census.find(census.load(tmp_path), name).fix
+        assert fix != "arch-update auto --sudoers", "that command only prints the rules"
+        assert fix.index("mktemp") < fix.index("visudo -cf") < fix.index("sudo install -m 0440") and "/etc/sudoers.d/zzz-arch-update-auto" in fix
+        assert "| sudo tee" not in fix, "rules that were never checked are not written to /etc"
+
+
+def test_a_local_case_quotes_the_path_of_its_log(tmp_path) -> None:
+    log = tmp_path / "a run" / "run.log"
+    case = census.record([], tmp_path, UNSEEN, "repo", log)
+    assert case.fix == f"less +G '{log}'"
+
+
+@pytest.mark.parametrize(
+    ("terminal", "flag"),
+    [("gnome-terminal", "--wait"), ("konsole", "--nofork"), ("wezterm", "--always-new-process")],
+)
+def test_a_terminal_that_hands_its_window_to_a_server_is_told_to_wait(terminal, flag) -> None:
+    """The weekly unit reads the answer when the window's process ends: a terminal that returns at once ends it early."""
+    from arch_updater import shell
+
+    assert flag in shell.TERMINALS[terminal]
+    machine = Machine(terminal)
+    machine.has = lambda tool: tool == terminal
+    assert flag in machine.terminal(), "the command that opens the window carries it"
+
+
+def test_the_low_space_case_describes_the_limit_and_the_cleanup_the_code_has(tmp_path) -> None:
+    """`arch-update vault` prints this text: it must name the live threshold and command, not an old design."""
+    from arch_updater import engine
+
+    entry = next(m for m in json.loads(engine.VAULT_PATH.read_text())["modes"] if m["id"] == "ROOT-SPACE-LOW")
+    response = entry["response"]
+    assert f"{engine.SOFT_FREE_BYTES / 1024**3:g} GiB" in response and " ".join(repairs.PACCACHE) in response
+    assert "-rk1" not in response and "4 GiB" not in response, "the interactive floor and the harder cleanup no longer exist"
+    assert entry["fix"].startswith("sudo " + " ".join(repairs.PACCACHE))
 
 
 def test_every_case_a_probe_can_name_is_in_the_census(tmp_path) -> None:
@@ -230,14 +290,14 @@ def test_no_passwordless_root_is_said_before_anything_runs(box) -> None:
     box.sh.fail["sudo -n"] = [failed("sudo: a password is required")]
     report = box.run()
     assert report["exit_code"] == exits.TOOL_FAILURE and cases_of(report) == [("privilege", "NO-ROOT")]
-    assert report["trouble"][0]["fix"] == "arch-update auto --sudoers" and box.sh.ran == []
+    assert "arch-update auto --sudoers >" in report["trouble"][0]["fix"] and box.sh.ran == []
 
 
 def test_a_pending_reboot_is_reported_but_does_not_stop_updates(box) -> None:
     box.issues.append({"mode": "RUNNING-KERNEL-MODULES-MISSING", "message": "gone", "reboot_required": True})
     report = box.run()
     assert report["state"] == "READY_FOR_REBOOT" and report["exit_code"] == 10
-    assert report["updated"] == {"repo": 2} and report["reboot_required"] is True
+    assert report["updated"] == {"repo": 1} and report["reboot_required"] is True
 
 
 def test_a_machine_failure_with_a_repair_on_record_is_repaired_and_looked_at_again(box) -> None:
@@ -286,6 +346,20 @@ def test_a_program_that_is_not_installed_is_not_broken(box) -> None:
     assert rebuild[-1] == "example-app-git" and box.sh.ran.index(rebuild) == 0, "repaired before any store ran"
 
 
+@pytest.mark.parametrize(
+    ("before", "after", "count"),
+    [
+        ("foo 1-1\nbar 2-1\n", "foo 1-2\nbar 2-1\n", 1),  # a new version of one package is one change
+        ("foo 1-1\n", "foo 1-1\nnew 1-1\n", 1),  # a new package
+        ("foo 1-1\ngone 1-1\n", "foo 1-1\n", 1),  # a removed one
+        ("foo 1-1\nbar 2-1\n", "foo 1-2\nbar 2-2\nnew 1-1\n", 3),
+        ("foo 1-1\n", "foo 1-1\n\n", 0),
+    ],
+)
+def test_a_package_that_changed_version_counts_once(before, after, count) -> None:
+    assert auto._packages_changed(before, after) == count
+
+
 def test_a_rebuild_is_an_aur_build_and_obeys_the_aur_switch(box) -> None:
     box.config(unattended_aur=False, smoke=[{"argv": ["example-app", "--version"], "rebuild": "example-app-git"}])
     box.sh.tools.add("example-app")
@@ -301,7 +375,7 @@ def test_a_rebuild_is_an_aur_build_and_obeys_the_aur_switch(box) -> None:
 def test_a_clean_week_updates_once_and_settles(box) -> None:
     report = box.run()
     assert report["state"] == "IDLE" and report["exit_code"] == 0 and report["trouble"] == []
-    assert report["updated"] == {"repo": 2} and report["looks"] == 2
+    assert report["updated"] == {"repo": 1} and report["looks"] == 2
     assert box.sh.count("repo") == 1 and box.sh.count("aur") == 1
     assert (box.root / "keep" / report["run_id"] / "packages.txt").read_text() == "a 1\n"
     assert report["cve"] == {"known": True, "findings": 1, "by_severity": {"High": 1}}
@@ -375,7 +449,7 @@ def test_a_store_that_failed_for_good_is_not_run_again_after_another_is_repaired
 def test_a_halt_after_changes_still_describes_what_was_left(box) -> None:
     box.sh.fail["aur"] = [failed(UNSEEN)]
     report = box.run()
-    assert report["updated"] == {"repo": 2} and report["looks"] == 2, "one look before, one after the halt"
+    assert report["updated"] == {"repo": 1} and report["looks"] == 2, "one look before, one after the halt"
 
 
 def test_the_closing_look_decides_nothing(box) -> None:
@@ -442,7 +516,7 @@ def test_when_aur_does_not_answer_properly_nothing_from_it_is_built(box, answer)
     report = box.run()
     assert box.sh.count("aur") == 0 and box.sh.count("repo") == 1
     assert cases_of(report) == [("aur", "AUR-UNREACHABLE")] and report["exit_code"] == exits.RECOVERY_PENDING
-    assert len(report["repairs"]) == 3 and report["updated"] == {"repo": 2}
+    assert len(report["repairs"]) == 3 and report["updated"] == {"repo": 1}
 
 
 def test_aur_is_not_asked_when_the_foreign_listing_fails(box) -> None:
@@ -543,9 +617,10 @@ def test_a_click_on_the_notice_opens_a_terminal_with_the_fix(box) -> None:
     box.run()
     asked = box.sh.calls[-1]
     assert asked[:4] == ["systemd-run", "--user", "--collect", "--quiet"], "the wait for the click is its own unit"
-    assert "--setenv=FIX=sudo pacman -Syu" in asked and "--setenv=OPEN=kitty" in asked
+    fix = census.find(census.load(box.root), "PACMAN-REPLACEMENT-CONFLICT").fix
+    assert f"--setenv=FIX={fix}" in asked and "--setenv=OPEN=kitty" in asked
     notice = asked[asked.index("notify-send") :]
-    assert notice[:4] == ["notify-send", "--urgency=critical", "--wait", "--action=default=sudo pacman -Syu"]
+    assert notice[:4] == ["notify-send", "--urgency=critical", "--wait", f"--action=default={fix}"]
     assert notice[4] == "arch-update auto: RECOVERY_PENDING"
 
 
@@ -554,7 +629,26 @@ def test_a_clean_week_with_aur_held_offers_the_aur_update_on_click(box) -> None:
     box.config(unattended_aur=False)
     box.run()
     asked = box.sh.calls[-1]
-    assert "--setenv=FIX=arch-update run --mode aur" in asked and "--urgency=normal" in asked
+    assert "--setenv=FIX=yay -Sua" in asked and "--urgency=normal" in asked
+
+
+@pytest.mark.parametrize("code", [129, 130, 143])
+def test_a_run_ended_by_any_stop_signal_is_announced_quietly_as_interrupted(box, code) -> None:
+    report = {"exit_code": code, "state": exits.NAMES[code], "crash": None, "trouble": [], "updated": {}, "held": {}}
+    auto.announce(box.sh, report)
+    assert box.sh.calls[-1][:3] == ["notify-send", "--urgency=normal", "arch-update auto: INTERRUPTED"]
+
+
+def test_a_failed_run_is_still_announced_as_critical(box) -> None:
+    auto.announce(box.sh, {"exit_code": exits.TOOL_FAILURE, "state": "TOOL_FAILURE", "crash": None, "trouble": [], "updated": {}, "held": {}})
+    assert box.sh.calls[-1][:2] == ["notify-send", "--urgency=critical"]
+
+
+def test_the_held_aur_reason_tells_the_command_and_promises_no_click(box) -> None:
+    box.config(unattended_aur=False)
+    report = box.run()
+    assert "click" not in report["held"]["aur"] and "yay -Sua" in report["held"]["aur"]
+    assert "click" not in auto.status()
 
 
 def test_the_click_script_runs_the_fix_in_the_terminal_only_when_clicked(tmp_path) -> None:
@@ -571,16 +665,22 @@ def test_without_a_terminal_the_notice_is_still_sent(box) -> None:
     assert box.sh.calls[-1][:2] == ["notify-send", "--urgency=critical"]
 
 
-def test_a_stop_request_lets_the_running_store_finish_and_starts_no_other(box) -> None:
+def test_a_stop_request_between_two_stores_starts_no_other(box) -> None:
     box.sh.tools.add("flatpak")
     world = auto.World(box.sh, {"unattended_aur": True}, census.load(box.root), "auto-1", box.root)
     world.kept = True
-    plain = box.sh.logged
-    box.patch.setattr(box.sh, "logged", lambda argv, log, timeout=0: (setattr(world, "stop", True), plain(argv, log))[1])
-    token = world._apply()
-    assert box.sh.ran == [UPGRADE] and world.done == {"repo"}
-    assert world.failed["aur"].case == "INTERRUPTED" and census.at(world.cases, token).id == "INTERRUPTED"
-    world.failure = token
+    plain = box.sh.capture
+
+    def capture(argv, timeout=30):  # the handler's two assignments, landing as the first store ends
+        if box.sh.ran and argv[:2] == ["pacman", "-Q"]:
+            world.stop, world.signum = True, signal.SIGTERM
+        return plain(argv, timeout)
+
+    box.patch.setattr(box.sh, "capture", capture)
+    with pytest.raises(exits.Stopped) as stopped:
+        world._apply()
+    assert stopped.value.signum == signal.SIGTERM
+    assert box.sh.ran == [UPGRADE] and world.done == {"repo"} and not world.failed
     assert world._census() == 0, "no repair is started after a stop either"
 
 
@@ -596,7 +696,7 @@ def test_status_lists_what_hangs_with_the_command_that_fixes_it(box) -> None:
     box.sh.fail["repo"] = [failed(CONFLICT)]
     box.run()
     text = auto.status()
-    assert text.startswith("RECOVERY_PENDING") and "repo: PACMAN-REPLACEMENT-CONFLICT" in text and "fix: sudo pacman -Syu" in text
+    assert text.startswith("RECOVERY_PENDING") and "repo: PACMAN-REPLACEMENT-CONFLICT" in text and 'fix: grep -h "in conflict"' in text
     (box.root / "last-auto.json").write_text("{cut short")
     assert auto.status() == "no unattended run on record yet\n" and scheduler.auto_status()["last_run"] is None
 
@@ -742,3 +842,57 @@ def test_sudoers_rules_name_the_account_that_runs_not_the_environment(monkeypatc
     real = pwd.getpwuid(os.getuid()).pw_name
     assert out.strip() and "spoofed" not in out
     assert all(line.startswith(f"{real} ALL=(root) NOPASSWD:") for line in out.splitlines() if line and not line.startswith("#"))
+
+
+# ── what a failure says: its cause, not the `[exit N]` the log adds ─────────
+
+
+def really_failed(tmp_path, text="error: unresolvable package conflicts detected"):
+    """A failed command as Shell.logged really reports it: the output, then the `[exit N]` line it appends."""
+    result = Shell().logged(["sh", "-c", f"echo '{text}'; exit 1"], tmp_path / "log")
+    assert result.output.rstrip().endswith("[exit 1]"), "the shape under test"
+    return result
+
+
+def test_a_failure_names_its_cause_on_every_surface_not_the_exit_line(box, tmp_path) -> None:
+    box.sh.fail["repo"] = [really_failed(tmp_path)]
+    report = box.run()
+    why = "error: unresolvable package conflicts detected"
+    assert why in report["trouble"][0]["detail"], "the evidence keeps the cause"
+    assert f"— {why}" in auto.status() and "[exit" not in auto.status()
+    told = [call for call in box.sh.calls if call[0] == "notify-send"]
+    assert why in told[-1][3] and "[exit" not in told[-1][3]
+
+
+@pytest.mark.parametrize(
+    ("detail", "line"),
+    [
+        ("error: x\n\n[exit 1]\n", "error: x"),
+        ("a\nerror: y\n  \n[exit -15]\n\n", "error: y"),
+        ("only this", "only this"),
+        ("[exit 1]\n", ""),
+        ("", ""),
+    ],
+)
+def test_cause_is_the_last_line_with_words_in_it(detail, line) -> None:
+    assert cause(detail) == line
+
+
+
+# ── SIGTERM while a store runs ends the run as interrupted ──────────────────
+
+
+def test_sigterm_while_a_store_runs_leaves_it_alone_and_ends_the_run_as_interrupted(box) -> None:
+    import os
+    import signal
+
+    box.sh.tools.add("flatpak")
+    plain = box.sh.logged
+    box.patch.setattr(box.sh, "logged", lambda argv, log, timeout=0: (os.kill(os.getpid(), signal.SIGTERM) if argv == UPGRADE else None, plain(argv, log))[1])
+    before = signal.getsignal(signal.SIGTERM)
+    report = box.run()
+    assert report["state"] == "INTERRUPTED" and report["exit_code"] == 128 + signal.SIGTERM == 143 and report["signal"] == signal.SIGTERM
+    assert box.sh.ran[-1] == UPGRADE and box.sh.count("flatpak") == 0, "the running command ended on its own and nothing else was started"
+    assert report["child_stopped"] is False, "it was not sent anything and it ended with 0: it finished"
+    assert report["trouble"][0]["detail"] == "stopped by SIGTERM"
+    assert signal.getsignal(signal.SIGTERM) == before and json.loads((box.root / "last-auto.json").read_text())["state"] == "INTERRUPTED"

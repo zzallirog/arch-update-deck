@@ -24,7 +24,9 @@ from typing import Any
 from . import census, exits, repairs, stores, tis, watch
 from .cve import scan_cves
 from .engine import STATE_ROOT, CommandResult, _write_json, aur_cache_root, load_json
+from .exits import Stopped
 from .shell import Shell
+from .textsafe import cause, clean
 from .watch import Verdict
 
 PROGRAM = Path(__file__).with_name("control.tis")
@@ -32,7 +34,7 @@ CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) /
 STARTER_CONFIG = {"conditions": [], "unattended_aur": False}
 KEEP_RUNS = 4
 SUDOERS_FILE = "/etc/sudoers.d/zzz-arch-update-auto"
-AUR_BY_HAND = "arch-update run --mode aur"
+AUR_BY_HAND = "yay -Sua"
 # Runs the notifier given as its arguments and waits; a click on the notice answers "default".
 # Only then does it open $OPEN (a terminal) on $FIX, and keeps the window until Enter.
 CLICK_SCRIPT = 'choice=$("$@"); [ "$choice" = default ] && exec $OPEN sh -c "$FIX; printf \'\\n[enter] \'; read _"'
@@ -43,13 +45,13 @@ class World:
     """What the two nodes are wired to: three ports and what each remembers."""
 
     def __init__(
-        self, sh: Shell, config: dict[str, Any] | None, cases: list[census.Case], run_id: str, run_dir: Path, dry_run: bool = False
+        self, sh: Shell, config: dict[str, Any] | None, cases: list[census.Case], run_id: str, run_dir: Path | None, dry_run: bool = False
     ) -> None:
         self.sh = sh
         self.config = config
         self.cases = cases
         self.run_id = run_id
-        self.run_dir = run_dir
+        self.run_dir = run_dir  # None: a look kept in memory, nothing of it is written
         self.dry_run = dry_run
         self.baseline: dict[str, Any] | None = None  # the machine at the first look
         self.verdicts: list[Verdict] = []
@@ -67,6 +69,9 @@ class World:
         self.kept = False
         self.dirty = False  # something changed since the last look
         self.stop = False  # SIGTERM arrived: finish the running command, start nothing new
+        self.signum = 0  # the signal that asked for the stop, 0 if none did
+        self.interrupted = False  # Ctrl-C, SIGTERM or SIGHUP ended the run: the running command was let finish, nothing else ran
+        self.child_stopped: bool | None = None  # of the command that was running then: did a signal end it (None: none was running)
         self.looks = 0
         self.watcher: Callable[[str, dict[str, Any]], None] = lambda kind, details: None  # someone following the run live
 
@@ -74,8 +79,9 @@ class World:
 
     def note(self, kind: str, **details: Any) -> None:
         record = {"at": datetime.now().astimezone().isoformat(), "kind": kind, **details}
-        with (self.run_dir / "tokens.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if self.run_dir is not None:
+            with (self.run_dir / "tokens.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         with contextlib.suppress(Exception):  # a screen that fails to draw must not stop an update half way
             self.watcher(kind, details)
 
@@ -84,7 +90,13 @@ class World:
 
     def command(self, argv: list[str], timeout: int | None = None) -> CommandResult:
         log = self.run_dir / "run.log"
-        return self.sh.logged(argv, log) if timeout is None else self.sh.logged(argv, log, timeout)
+        result = self.sh.logged(argv, log) if timeout is None else self.sh.logged(argv, log, timeout)
+        if self.sh.interrupted:  # Ctrl-C (or the screen's SIGHUP) while it ran: it has ended now, and nothing else is started
+            self.sh.interrupted = False
+            raise Stopped(self.sh.signum, exits.ended_by_signal(result.returncode, self.sh.sent))
+        if self.signum:  # SIGTERM while it ran: it was left alone and has ended on its own
+            raise Stopped(self.signum, exits.ended_by_signal(result.returncode))
+        return result
 
     # ── ports ───────────────────────────────────────────────────────────────
 
@@ -139,13 +151,12 @@ class World:
             if not self.kept and not self._keep():
                 break  # no record, no update
             before = self.sh.capture(list(store.listing), timeout=120)
-            if self.stop:
-                self._fail(store.name, self._case("INTERRUPTED"), "the run was asked to stop")
-                break
+            if self.stop:  # only the signal handler sets it, and it sets the number with it
+                raise Stopped(self.signum)
             self.note("store", name=store.name, phase="start")
             result = self.command(repairs.sudo(argv) if store.root else argv)
             after = self.sh.capture(list(store.listing), timeout=120)
-            changed = len(set(before.output.splitlines()) ^ set(after.output.splitlines())) if before.returncode == after.returncode == 0 else 0
+            changed = _packages_changed(before.output, after.output) if before.returncode == after.returncode == 0 else 0
             self.note("store", name=store.name, phase="done", changed=changed, ok=result.returncode == 0)
             if changed:
                 self.updated[store.name] = self.updated.get(store.name, 0) + changed
@@ -168,7 +179,7 @@ class World:
         if store.name != "aur":
             return argv
         if (self.config or {}).get("unattended_aur") is not True:
-            self.held["aur"] = f"unattended AUR is off; click the notice or run `{AUR_BY_HAND}`"
+            self.held["aur"] = f"unattended AUR is off; run `{AUR_BY_HAND}`"
             return None
         try:
             fresh = stores.aur_too_fresh(self.sh, float((self.config or {}).get("aur_min_age_days", stores.AUR_MIN_AGE_DAYS)))
@@ -205,7 +216,7 @@ class World:
     def keep_root(self) -> Path:
         """Where the pre-update record lands: the configured disk, or beside the run."""
         keep = (self.config or {}).get("keep")
-        return Path(keep) if keep else self.run_dir.parent.parent / "keep"
+        return Path(keep) if keep else (self.run_dir.parent.parent if self.run_dir else STATE_ROOT) / "keep"
 
     def _keep(self) -> bool:
         """Once, before the first change: what was installed, and the readable part of /etc.
@@ -295,11 +306,19 @@ def sudoers_rules(user: str, aur: bool = False, sh: Shell | None = None) -> str:
     return "\n".join([*header, *dict.fromkeys(skipped), *rules]) + "\n"
 
 
+def _packages_changed(before: str, after: str) -> int:
+    """How many packages differ between two listings: a new version of one is one change, not two lines."""
+    return len({line.split()[0] for line in set(before.splitlines()) ^ set(after.splitlines()) if line.strip()})
+
+
 def _trouble(world: World) -> list[dict[str, Any]]:
     """Everything still wrong at the end, each with its census case and the one command for a human."""
     items = list(world.failed.values())
     if world.blocker and world.blocker not in items:
         items.append(world.blocker)
+    if world.interrupted:
+        by = "Ctrl-C" if world.signum == signal.SIGINT else signal.Signals(world.signum).name
+        items.append(Verdict("run", "fail", "INTERRUPTED", f"stopped with {by}" if by == "Ctrl-C" else f"stopped by {by}"))
     known = {case.id: case for case in world.cases}
     return [
         {**asdict(item), "meaning": known[item.case].meaning if item.case in known else "", "fix": known[item.case].fix if item.case in known else ""}
@@ -311,11 +330,12 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
     """Tell the desktop how the run ended; a run nobody hears about is not finished."""
     if not sh.has("notify-send"):
         return
-    body = report["crash"] or "; ".join(f"{item['probe']}: {item['detail']} → {item['fix']}" for item in report["trouble"])
+    body = report["crash"] or "; ".join(f"{item['probe']}: {cause(item['detail'])} → {item['fix']}" for item in report["trouble"])
     body = body or f"updated: {report['updated'] or 'nothing'}"
     if report["held"]:
         body += f" · held: {', '.join(report['held'])}"
-    urgency = "normal" if report["exit_code"] in (exits.IDLE, exits.READY_FOR_REBOOT, exits.SKIPPED) else "critical"
+    quiet = report["exit_code"] in (exits.IDLE, exits.READY_FOR_REBOOT, exits.SKIPPED) or exits.interrupted(report["exit_code"])
+    urgency = "normal" if quiet else "critical"
     notice = ["notify-send", f"--urgency={urgency}", f"arch-update auto: {report['state']}", body[:400]]
     fix = next((item["fix"] for item in report["trouble"] if item["fix"]), AUR_BY_HAND if "aur" in report["held"] else "")
     terminal = sh.terminal()
@@ -341,6 +361,15 @@ def _new_run_dir(run_id: str) -> tuple[str, Path]:
         return name, STATE_ROOT / "runs" / name
 
 
+def look(sh: Shell | None = None) -> list[dict[str, Any]]:
+    """One look at the machine, kept in memory: no run folder, no report, no lock and no vulnerability scan.
+
+    What Update Day shows before anything is asked. A run's folder is made only when the update really runs.
+    """
+    world = World(sh or Shell(), load_json(CONFIG_PATH) if CONFIG_PATH.is_file() else None, [], "look", None, dry_run=True)
+    return [asdict(verdict) for verdict in world.look()]
+
+
 def run_auto(
     dry_run: bool = False,
     sh: Shell | None = None,
@@ -361,8 +390,11 @@ def run_auto(
             if not dry_run:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            skipped = {"run_id": run_id, "exit_code": exits.SKIPPED, "state": exits.NAMES[exits.SKIPPED], "crash": None}
-            skipped.update(trouble=[], held={}, updated={}, reason="another run holds the lock")
+            # Every key a reader of a report reads, so the screen and `status` never meet a half-filled one.
+            skipped = {"run_id": run_id, "started_at": None, "finished_at": datetime.now().astimezone().isoformat(), "dry_run": False, "out": 0}
+            skipped.update(exit_code=exits.SKIPPED, state=exits.NAMES[exits.SKIPPED], looks=0, crash=None, trouble=[], verdicts=[], updated={}, held={})
+            skipped.update(signal=None, child_stopped=None)
+            skipped.update(repairs=[], pacnew=[], reboot_required=False, cve={"known": False, "error": "not scanned"}, wrote=None, reason="another run holds the lock")
             announce(sh, skipped)
             return skipped
         run_id, run_dir = _new_run_dir(run_id)
@@ -371,17 +403,21 @@ def run_auto(
         world.watcher = watcher or world.watcher
         out, crash, previous, cve = 0, None, None, {"known": False, "error": "not scanned"}
         try:
-            # On SIGTERM the command in flight is left to finish; no new one starts.
-            previous = signal.signal(signal.SIGTERM, lambda *_: setattr(world, "stop", True))
+            # On SIGTERM the command in flight is left to finish and no new one starts; the run then ends as interrupted.
+            previous = signal.signal(signal.SIGTERM, lambda number, _frame: (setattr(world, "stop", True), setattr(world, "signum", number)))
             world.cases = census.load(STATE_ROOT)
             world.config = load_json(CONFIG_PATH) if CONFIG_PATH.is_file() else None
             out = tis.run(tis.parse(PROGRAM.read_text(encoding="utf-8")), world, halt="OUT", trace=world.trace, step=step)
             if world.dirty:
                 world.look()  # halted after changing something: describe what was left, decide nothing
             cve = cve_axis()
+        except KeyboardInterrupt as stop:  # the report below is still written and the lock still released
+            out, world.interrupted = 0, True
+            world.signum = getattr(stop, "signum", signal.SIGINT)
+            world.child_stopped = getattr(stop, "child_stopped", None)
         except Exception as exc:  # whatever broke, the week ends in a report, not a traceback
             out, crash = 0, f"{type(exc).__name__}: {exc}"
-        code = exits.TOOL_FAILURE if crash else exit_code(out, world)
+        code = 128 + world.signum if world.interrupted else exits.TOOL_FAILURE if crash else exit_code(out, world)
         report = {
             "run_id": run_id,
             "started_at": started,
@@ -389,6 +425,8 @@ def run_auto(
             "dry_run": dry_run,
             "out": out,
             "exit_code": code,
+            "signal": world.signum if world.interrupted else None,  # which one ended the run
+            "child_stopped": world.child_stopped,  # did a signal end the command that was running (None: none was)
             "state": "DRY_RUN" if dry_run else exits.NAMES[code],
             "looks": world.looks,
             "crash": crash,
@@ -426,12 +464,12 @@ def status() -> str:
     lines = [f"{report['state']} · {report['finished_at'][:16]} · updated {report['updated'] or 'nothing'}"]
     if report.get("crash"):
         lines.append(f"  crash: {report['crash']}")
-    lines += [f"  {item['probe']}: {item['case']} — {item['detail'].splitlines()[-1] if item['detail'] else item['meaning']}\n    fix: {item['fix']}" for item in report["trouble"]]
+    lines += [f"  {item['probe']}: {item['case']} — {cause(item['detail']) or item['meaning']}\n    fix: {item['fix']}" for item in report["trouble"]]
     lines += [f"  held {name}: {why if isinstance(why, str) else ', '.join(why)}" for name, why in report["held"].items()]
     lines += [f"  pacnew: {path}\n    fix: sudo pacdiff" for path in report["pacnew"]]
     if report["reboot_required"]:
         lines.append("  reboot pending\n    fix: systemctl reboot")
-    return "\n".join(lines) + "\n"
+    return clean("\n".join(lines) + "\n")
 
 
 def init_config() -> str:

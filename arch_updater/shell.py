@@ -24,16 +24,19 @@ from .engine import CommandResult, run_capture
 # Programs that change the package set or the boot files. A signal in the middle of one leaves a
 # half-applied transaction, so they are never given a time limit, whatever the caller asks for.
 TRANSACTION_TOOLS = frozenset({"pacman", "yay", "paru", "paccache", "mkinitcpio", "dkms", "snap", "flatpak", "grub-mkconfig"})
-# Terminals, and what each wants in front of the command it should run.
+# Terminals, and what each wants in front of the command it should run. The weekly unit reads the answer when the
+# window's process ends, so each is told to stay in the foreground until the command in it has ended: a terminal
+# that hands the window to a server and returns at once (gnome-terminal, konsole, wezterm joining a running
+# instance) would end `sh.logged` before anyone answered.
 TERMINALS = {
     "xdg-terminal-exec": [],
-    "kitty": [],
-    "foot": [],
-    "wezterm": ["start", "--"],
-    "alacritty": ["-e"],
-    "konsole": ["-e"],
-    "gnome-terminal": ["--"],
-    "xterm": ["-e"],
+    "kitty": [],  # stays in the foreground
+    "foot": [],  # so does foot (not footclient)
+    "wezterm": ["start", "--always-new-process", "--"],  # without it `start` asks a running instance for a window and returns
+    "alacritty": ["-e"],  # stays in the foreground
+    "konsole": ["--nofork", "-e"],  # forks into the background by default
+    "gnome-terminal": ["--wait", "--"],  # returns at once by default
+    "xterm": ["-e"],  # stays in the foreground
 }
 
 
@@ -43,6 +46,11 @@ ROOT_PATH = ("/usr/bin", "/usr/sbin", "/bin", "/sbin")
 
 
 class Shell:
+    shared_session = False  # set once sudo has been unlocked on this terminal: its ticket belongs to the session
+    interrupted = False  # a Ctrl-C arrived while a command ran; the command was let finish (see logged)
+    signum = signal.SIGINT  # which signal that was: Ctrl-C, or the SIGTERM / SIGHUP the screen took the same way
+    sent = False  # this program told the command to stop (in a session of its own it is the only one that can)
+
     def has(self, tool: str) -> bool:
         return shutil.which(tool) is not None
 
@@ -71,6 +79,20 @@ class Shell:
         """Run a short read-only command and return its output."""
         return run_capture(argv, timeout=timeout)
 
+    def interactive(self, argv: list[str]) -> int:
+        """Run a command on the person's own terminal, as a password prompt needs, and return its exit status."""
+        try:
+            return subprocess.run(argv, check=False).returncode
+        except FileNotFoundError:
+            return 127
+
+    def stay_in_session(self) -> None:
+        """From now on commands that change the machine run in this terminal session, not a new one.
+
+        sudo keeps its password ticket per terminal session; a command in a session of its own has no ticket.
+        """
+        self.shared_session = True
+
     def logged(self, argv: list[str], log: Path, timeout: int | None = None) -> CommandResult:
         """Run a command that changes the machine, with its output going straight to the log.
 
@@ -88,23 +110,46 @@ class Shell:
             handle.flush()
             start = handle.tell()
             try:
-                # Its own session, so a timeout can reach the whole tree and not just the first child.
-                child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
+                # Its own session, so a timeout reaches the whole tree. In the person's terminal session (sudo's ticket is
+                # theirs) it stays in the foreground group too: it then gets Ctrl-C from the terminal like any command there.
+                own = {} if self.shared_session else {"start_new_session": True}
+                child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT, **own)
             except FileNotFoundError:
                 returncode = 127
             else:
                 try:
                     returncode = child.wait(timeout=timeout)
+                except KeyboardInterrupt as stop:
+                    returncode = self._finish(child, getattr(stop, "signum", signal.SIGINT))
                 except subprocess.TimeoutExpired:
                     # Only reached for commands that are not transactions (see above).
                     with contextlib.suppress(PermissionError, ProcessLookupError):
-                        os.killpg(child.pid, signal.SIGTERM)
+                        # Our own group is the person's foreground group: only the child may be signalled there.
+                        child.terminate() if self.shared_session else os.killpg(child.pid, signal.SIGTERM)
                     child.wait()
                     returncode = 124
             handle.write(f"\n[exit {returncode}]\n".encode())
         with log.open("rb") as handle:
             handle.seek(start)
             return CommandResult(list(argv), returncode, handle.read().decode("utf-8", errors="replace"))
+
+    def _finish(self, child: subprocess.Popen[bytes], signum: int = signal.SIGINT) -> int:
+        """Ctrl-C, SIGTERM or SIGHUP while a command ran: wait for it to end. A package transaction is never killed half way.
+
+        On the person's terminal the command already got the same Ctrl-C from the terminal; in a session of its own it
+        gets it from here. Either way it decides how to stop (pacman and yay finish or undo the step), and so does
+        a second Ctrl-C: the command is told again, the wait goes on.
+        """
+        self.interrupted, self.signum, self.sent = True, signum, False
+        while True:
+            try:
+                if not self.shared_session:
+                    with contextlib.suppress(PermissionError, ProcessLookupError):
+                        os.killpg(child.pid, signal.SIGINT)
+                        self.sent = True
+                return child.wait()
+            except KeyboardInterrupt:
+                continue
 
     def terminal(self) -> list[str] | None:
         """The command that opens a terminal running what follows it, or None if there is none."""

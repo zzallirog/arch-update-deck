@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "arch-update-deck"
 dynamic = ["version"]
-description = "Safe, supervised Arch Linux updates: an interactive menu, read-only checks and an unattended weekly update"
+description = "Safe, supervised Arch Linux updates: one screen that asks before it updates, read-only checks and an unattended weekly update"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

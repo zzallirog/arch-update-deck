@@ -1,0 +1,39 @@
+ UPDATE DAY                                                                         Thu 08.10 04:09 
+
+ PACKAGE      INSTALLED   AVAILABLE   FROM
+ package-01   1.2.3-4     1.2.4-1     REPO
+ package-02   1.2.3-4     1.2.4-1     REPO
+ package-03   1.2.3-4     1.2.4-1     REPO
+ package-04   1.2.3-4     1.2.4-1     REPO
+ package-05   1.2.3-4     1.2.4-1     REPO
+ package-06   1.2.3-4     1.2.4-1     REPO
+ package-07   1.2.3-4     1.2.4-1     REPO
+ package-08   1.2.3-4     1.2.4-1     REPO
+ package-09   1.2.3-4     1.2.4-1     REPO
+ package-10   1.2.3-4     1.2.4-1     REPO
+ package-11   1.2.3-4     1.2.4-1     REPO
+ package-12   1.2.3-4     1.2.4-1     REPO
+ package-13   1.2.3-4     1.2.4-1     REPO
+ package-14   1.2.3-4     1.2.4-1     REPO
+ package-15   1.2.3-4     1.2.4-1     REPO
+ package-16   1.2.3-4     1.2.4-1     REPO
+ package-17   1.2.3-4     1.2.4-1     REPO
+ package-18   1.2.3-4     1.2.4-1     REPO
+ package-19   1.2.3-4     1.2.4-1     REPO
+ package-20   1.2.3-4     1.2.4-1     REPO
+ package-21   1.2.3-4     1.2.4-1     REPO
+ package-22   1.2.3-4     1.2.4-1     REPO
+ package-23   1.2.3-4     1.2.4-1     REPO
+ package-24   1.2.3-4     1.2.4-1     REPO
+ package-25   1.2.3-4     1.2.4-1     REPO
+ package-26   1.2.3-4     1.2.4-1     REPO
+ + 34 more
+
+ TOTAL    60 from repositories
+
+ MACHINE  fine · 8 checks
+ PENDING  nothing since last time
+
+ UPDATE NOW?  [y] yes   [N] not now   Enter means no
+
+ l last run · k kernel

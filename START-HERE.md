@@ -1,107 +1,114 @@
-# Quick start
+# Start here
 
-Sets up the weekly unattended update and checks that it works. See
-[README.md](README.md) for what the tool does and does not do, and
-[docs/REFERENCE.md](docs/REFERENCE.md) for details. The sudoers rule (step 4)
-comes before the first dry run on purpose: without it the dry run stops at the
-root check.
-
-## Before you start
-
-You need `sudo` (with `visudo`), `tar` with `zstd`, `pacman-contrib`
-(`checkupdates`, `paccache`) and a systemd user session. Run
-`command -v sudo visudo tar zstd checkupdates fakeroot paccache systemctl`: a
-name missing from the output is not installed (`sudo`, `pacman-contrib` and
-`fakeroot` are not in every base install; `checkupdates` needs `fakeroot`). Everything else is optional; the reference says what is lost
-without each program.
+Install, run `arch-update`, read the screen, press `y`: that is the whole first
+update. "Make it weekly and unattended" is optional. See [README.md](README.md)
+and [docs/REFERENCE.md](docs/REFERENCE.md). You need `sudo`, `tar` with `zstd` and
+`pacman-contrib` (`checkupdates`, which needs `fakeroot`).
 
 ## 1. Install
 
 ```bash
-./install.sh
-command -v arch-update
+./install.sh && command -v arch-update
 ```
 
-If the second command prints nothing, `~/.local/bin` is not in `PATH` (the
-installer prints a warning). Add it, then open a new shell. In bash:
-`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`. In fish:
-`fish_add_path ~/.local/bin`.
+If it prints nothing, add `~/.local/bin` to `PATH` (README, Install).
 
-## 2. Create the configuration
+## 2. Update
+
+```bash
+arch-update
+```
+
+The first time, the tool writes a starter configuration to
+`~/.config/arch-updater/auto.json` and says so under `PENDING`. The screen shows
+the packages waiting with their source (`REPO`, `AUR · BY HAND`, `FLATPAK`,
+`SNAP`), `TOTAL`, `MACHINE` (`fine · 8 checks`, or the failed checks in red),
+`PENDING` (what the last update left undone, with the command that fixes it) and
+the question `UPDATE NOW?`. A dim line offers `l` (end of the last log) and `k`
+(kernel profiles). The question is left out when the repository list cannot be
+read, and when only AUR packages wait with the AUR off; the screen then says
+what to do by hand (`yay -Sua`).
+
+Press `y`. If `sudo` needs a password and you are at a terminal, the tool runs
+`sudo -v` and you type the password there; it goes to `sudo`, not to this tool.
+A refused password ends the visit with exit status 70 and nothing changed. The
+update then runs on the same screen, one line per step (sudo's ticket is renewed
+every minute meanwhile), and ends with one block:
+
+```
+ updated: repositories 1
+   kwin   6.7.5-1.1 → 6.7.5-3.1
+
+ DONE · REBOOT NEEDED   [Enter] close
+```
+
+A failure ends in red `FAILED` and the command that fixes it. `REBOOT NEEDED`
+means a kernel was replaced; reboot yourself. Enter closes the screen. At the
+question, Enter, `n`, `q`, Esc or any single key except `y`, `l` and `k` means
+not now: nothing is changed (arrow keys are ignored). Ctrl-C is safe: a running
+package command ends by itself, nothing new starts, the exit status is 130. AUR
+rows are listed but not built unless you turn the AUR on. Before the first
+change the tool saves the package lists and the readable part of `/etc` to
+`~/.local/state/arch-updater/keep/`. If you do not want a weekly update, you are
+done.
+
+## Make it weekly and unattended
+
+### A. Configuration and record directory
 
 ```bash
 arch-update auto --init
 ```
 
-This writes `~/.config/arch-updater/auto.json` (an existing file is never
-overwritten) with `{"conditions": [], "unattended_aur": false}`. Without this
-file the unattended update exits 70.
-
-## 3. Set the record directory
-
-Before the first update of each run, the package lists and the part of `/etc`
-your user can read are saved. Add `keep`, a directory on another physical disk:
+Writes `~/.config/arch-updater/auto.json` (`{"conditions": [],
+"unattended_aur": false}`); it never overwrites a file, and the first
+`arch-update` already wrote one. Without it `arch-update auto` exits 70. Then add
+`keep`, a directory on another physical disk, for the record saved before each
+update:
 
 ```json
 {"conditions": [], "keep": "/mnt/second-disk/arch-update", "unattended_aur": false}
 ```
 
-The directory is created when the record is written, with any missing parents.
 The nearest folder that already exists must be writable and on a different
-device than `/`; if not, the update does not start. That check compares device
-numbers, so on btrfs a second subvolume of the same disk counts as "another
-disk": the tool cannot tell, check yourself. Without `keep`, the record goes to
-`~/.local/state/arch-updater/keep/`, on the system disk.
+device than `/`, or the update does not start. The check compares device
+numbers, so on btrfs a second subvolume of the same disk passes: check yourself.
 
-## 4. Allow the update commands without a password
+### B. Allow the update commands without a password
 
-Print the rules and read them first:
-
-```bash
-arch-update auto --sudoers
-```
-
-Each rule is `<user> ALL=(root) NOPASSWD: <program> <fixed arguments>`, for
-`true`, `pacman -Syu --noconfirm`, `paccache -rk2`, `mkinitcpio -P`,
-`dkms autoinstall` (and `snap refresh`). A program that is not found in
-`/usr/bin`, `/usr/sbin`, `/bin` or `/sbin`, or whose file root does not own or
-others can write, gets a `# skipped <program>` line instead of a rule; look for
-such lines. A `# skipped snap` line is normal if you do not use snap. Then
-install the rules. This works in bash and fish and stops if `visudo` finds an
-error:
+The timer has no terminal for a password. Print the rules and read them
+(`arch-update auto --sudoers`). Each rule is
+`<user> ALL=(root) NOPASSWD: <program> <fixed arguments>`, for `true`, `pacman -Syu --noconfirm`, `paccache -rk2`, `mkinitcpio -P`,
+`dkms autoinstall` (and `snap refresh`). A program missing from `/usr/bin`,
+`/usr/sbin`, `/bin` and `/sbin`, not owned by root or writable by others gets a
+`# skipped <program>` line instead (normal for snap if you have none). Install
+the rules; this stops if `visudo` finds an error:
 
 ```bash
 sh -c 'f=$(mktemp) && arch-update auto --sudoers > "$f" && visudo -cf "$f" && sudo install -m 0440 "$f" /etc/sudoers.d/zzz-arch-update-auto; rm -f "$f"'
 ```
 
-Keep the file name: sudo applies the last matching rule, and this file must sort
+Keep the file name: sudo applies the last matching rule, so this file must sort
 after the rule that grants all commands with a password. Check with
-`sudo -n true && echo passwordless-root-works`; an error such as "a password is
-required" means the rule is not in effect (`sudo -l` shows which rule wins).
+`sudo -n true && echo passwordless-root-works`; if it asks for a password the
+rule is not in effect (`sudo -l` shows which one wins).
 
-## 5. Look at the machine
+### C. Look at the machine
 
 ```bash
 arch-update auto --dry-run
 ```
 
-This prints a JSON report. It installs nothing and repairs nothing. It does
-create `~/.local/state/arch-updater/runs/auto-<time>/` (`report.json`,
-`tokens.jsonl`) and the file `auto.lock`; a line on stderr says where. It runs
-your configured conditions, and `arch-audit` if installed, and can take up to a
-minute. Look at:
+Prints a JSON report; installs and repairs nothing. It writes a
+`runs/auto-<time>/` directory in the state directory (a line on stderr says
+where), runs your conditions and `arch-audit` if installed, and can take up to a
+minute. Look at `"exit_code"` (also the exit status; `0` or `10`, a reboot
+pending, is good), `"verdicts"` (every `"status"` should be `"pass"`),
+`"trouble"` (should be `[]`; each entry has a `fix`) and `"cve"` (`"known":
+false` means `arch-audit` is missing or failed; it never changes the exit
+status). Exit 70 with `"case": "NO-ROOT"` is expected before step B.
 
-- `"state": "DRY_RUN"` and `"exit_code"`. The command's exit status is the same
-  number. `0` or `10` (a reboot is pending) is good.
-- `"verdicts"`: every `"status"` should be `"pass"`.
-- `"trouble"`: should be `[]`. Anything in it comes with a `fix`.
-- `"cve"`: `"known": false` means `arch-audit` is not installed or the scan
-  failed; the `error` field says which. It never affects the exit status.
-
-Exit status 70 with `"case": "NO-ROOT"` is expected until step 4 is done. The
-reference lists the other statuses.
-
-## 6. Enable the timer
+### D. Enable the timer
 
 ```bash
 arch-update schedule --install-auto
@@ -109,31 +116,24 @@ loginctl enable-linger "$USER"
 systemctl --user list-timers arch-update-auto.timer
 ```
 
-The first command installs `arch-update-auto.timer` as a systemd user unit:
-Saturday 12:00, up to 30 minutes of random delay, `Persistent=true`, so a missed
-run starts when your user manager next starts. The second lets that manager run
-while you are logged out (otherwise the weekly run happens only while you are
-logged in). The third shows the next run. A finished run sends a desktop
-notification, if `notify-send` is installed.
+Installs a systemd user timer: Saturday 12:00, up to 30 minutes of random
+delay, `Persistent=true` (a missed run starts when your user manager next
+starts). Lingering keeps that manager running while you are logged out.
 
-To be asked before each update, add `"ask": true` to the configuration: the
-timer then opens a terminal on `arch-update auto --ask`, where `y` updates and
-anything else (Enter included) does nothing. It needs a terminal the tool
-recognises and `DISPLAY` or `WAYLAND_DISPLAY` in the systemd user manager's
-environment; the reference has the details, the time-out and the exit statuses.
-To see the prompt now, run `arch-update auto --ask` in a terminal.
-
-Optional: `arch-update schedule --install` adds the daily read-only patrol;
-`schedule --remove-auto` and `--remove` delete the two timers again.
+To be asked first, add `"ask": true` to the configuration. The timer then opens
+a terminal with the same screen: `y` updates, anything else does nothing, no
+answer within `ask_timeout_minutes` (default 30) skips the week. You type the
+password in that window, so this mode works without step B. It needs a terminal
+the tool recognises and a display in the systemd user manager's environment
+(reference). `schedule --install` adds the daily read-only patrol;
+`--remove-auto` and `--remove` delete the timers.
 
 ## Verifying a repair
 
-This shows the tool recognising a known failure, the pacman lock, and waiting
-for it to clear. The commands below create a lock file themselves; a root timer
-removes it after 180 seconds, only if it still contains the text
-`arch-update-demo`, so a lock made by a real pacman is never touched. The timer
-lives in the system manager, so closing the terminal or pressing Ctrl-C does not
-leave the lock behind. The commands work in bash and fish:
+The tool meets a known failure, the pacman lock, and waits for it. Part 1 needs
+step B: without the rule the dry run stops at the root check with exit 70. A
+root timer removes the demo lock after 180 seconds, only if it still contains
+`arch-update-demo`, so a real pacman lock is never touched. Bash and fish:
 
 ```bash
 ls /var/lib/pacman/db.lck
@@ -141,61 +141,37 @@ sudo systemd-run --quiet --on-active=180 /usr/bin/sh -c '/usr/bin/grep -qx arch-
 echo arch-update-demo | sudo tee /var/lib/pacman/db.lck
 ```
 
-The `ls` must say `No such file or directory`. If it prints the path, a lock
-exists already: stop and leave it alone.
+The `ls` must say `No such file or directory`; if it prints the path, a lock
+exists already: leave it alone.
 
-**A. Only look.** Within the 180 seconds, run `arch-update auto --dry-run`.
-Expected: exit status 30 and `"state": "DRY_RUN"`; in `"trouble"` an entry with
+**1. Only look.** Within the 180 seconds run `arch-update auto --dry-run`.
+Expected: exit status 30, `"state": "DRY_RUN"`; in `"trouble"` an entry with
 `"probe": "lock"`, `"case": "PACMAN-LOCK"` and
 `"fix": "sudo fuser -v /var/lib/pacman/db.lck"`; in `"repairs"`
-`{"case": "PACMAN-LOCK", "repair": "wait-for-lock", "attempted": false}`. The
-repair is listed but not run, because a dry run attempts no repair.
+`{"case": "PACMAN-LOCK", "repair": "wait-for-lock", "attempted": false}` (a dry
+run attempts no repair).
 
-**B. Watch the repair.** This is a real update: after the repair the tool
-updates your system. Wait until `ls` says `No such file`, create the lock again
-with the three commands above, and run `arch-update auto --ask`. The screen
-reads the queue and does a dry check first (a few seconds, longer if
-`checkupdates` is slow); the `MACHINE` line shows
-`pacman is busy: /var/lib/pacman/db.lck`. Press `y` before the 180 seconds are
-over; if the lock is already gone, the run just updates and shows no repair.
-Expected lines after `y` (one `updating` line per installed store):
+**2. Watch the repair.** This is a real update. Wait until `ls` says `No such
+file`, create the lock again with the three commands, and run `arch-update`.
+`MACHINE` shows `pacman is busy: /var/lib/pacman/db.lck` in red. Press `y`
+within the 180 seconds (if the lock is gone, the run just updates). Expected
+lines after `y` (one `updating` line per installed store):
 
 ```
 checking   pacman is busy: /var/lib/pacman/db.lck
 failure    seen before, repairing the same way  PACMAN-LOCK
 checking   machine is fine
 record     <keep directory>/auto-<time>
-updating   repositories …  <n> changed
+updating   repositories  <n> changed
 checking   machine is fine
 ```
 
-The repair waits up to two minutes for the lock, so the second line appears once
-the lock is gone; if the two minutes pass first, it appears again and the tool
-waits again, up to three times. Then the screen ends with `DONE`. (A lock that
-never clears ends with exit 30 and the headline `FAILED`; the reference
-explains.)
+The repair waits up to two minutes, so the second line appears once the lock is
+gone; if the two minutes pass first, the first two lines repeat, up to three
+times. The screen then ends with `DONE`; a lock that never clears ends with exit
+30 and `FAILED`. If the lock is still there after four minutes (the timer was
+lost), `cat /var/lib/pacman/db.lck`: only if it prints `arch-update-demo` may you
+`sudo rm /var/lib/pacman/db.lck`.
 
-If four minutes after creating the demo lock `ls /var/lib/pacman/db.lck` still
-prints the path (for example, the machine rebooted and the timer was lost), run
-`cat /var/lib/pacman/db.lck`. Only if it prints `arch-update-demo` is it the demo
-lock, and you can remove it with `sudo rm /var/lib/pacman/db.lck`. Otherwise
-leave it.
-
-## Troubleshooting
-
-`arch-update auto --status` lists the problems left by the last run, each with a
-`fix`: the command to run. Clicking the desktop notification opens a terminal on
-that command; a `fix` that starts with `sudo` asks for your password there.
-
-`runs/auto-<time>/run.log` in `~/.local/state/arch-updater/` holds the update,
-repair and `tar` commands of a run (not the read-only checks; their results are
-in `report.json`). A store failure seen for the first time is recorded in
-`census.json` there, with `less +G <run.log>` as its `fix`; to have it handled
-next time, put the command that resolves it into that `fix` field.
-
-## AUR
-
-The timer does not update the AUR: use `arch-update run --mode aur` (needs `yay`)
-or click the notification. Before you turn on `unattended_aur`, read the README
-section "AUR": it builds packages without showing you the `PKGBUILD`, and its
-sudoers rules let any process running as you install an arbitrary package as root.
+`arch-update auto --status` lists what is left, each with a `fix`. Read
+[AUR](README.md#aur) before turning `unattended_aur` on.

@@ -72,3 +72,59 @@ def test_kernel_cli_declined_confirmation_installs_nothing(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_confirm_kernel", lambda profile: False)
     assert cli.main(["kernel", "lts"]) == 1
     assert selected == []
+
+
+def _stream_failing_nth(monkeypatch, nth: dict[str, int]):
+    """Fail the Nth call (1-based) of a verb: the backup copy and the rollback copy are both `cp`."""
+    seen: dict[str, int] = {}
+    calls: list[list[str]] = []
+
+    def fake_stream(argv, log_path, dry_run=False):
+        calls.append(list(argv))
+        seen[argv[1]] = seen.get(argv[1], 0) + 1
+        return CommandResult(list(argv), 1 if nth.get(argv[1]) == seen[argv[1]] else 0, "")
+
+    monkeypatch.setattr(engine, "stream_command", fake_stream)
+    return calls
+
+
+def test_a_rollback_whose_copy_fails_says_so_instead_of_claiming_it_rolled_back(monkeypatch, tmp_path) -> None:
+    _calls_recorder(monkeypatch, tmp_path)
+    calls = _stream_failing_nth(monkeypatch, {"install": 1, "cp": 2})  # the rewrite fails, then the restoring copy does
+    with pytest.raises(RuntimeError) as raised:
+        engine.select_kernel("lts")
+    assert "rollback FAILED" in str(raised.value) and "rolled back" not in str(raised.value) and ".bak" in str(raised.value)
+    assert [argv[1] for argv in calls].count("grub-mkconfig") == 1, "no menu is regenerated from a file that was not restored"
+
+
+def test_a_rollback_whose_menu_cannot_be_regenerated_says_so(monkeypatch, tmp_path) -> None:
+    _calls_recorder(monkeypatch, tmp_path)
+    _stream_failing_nth(monkeypatch, {"install": 1, "grub-mkconfig": 2})
+    with pytest.raises(RuntimeError) as raised:
+        engine.select_kernel("lts")
+    assert "restored from" in str(raised.value) and "regenerating" in str(raised.value) and "sudo grub-mkconfig" in str(raised.value)
+
+
+def test_a_menu_without_the_kernel_is_rolled_back_truthfully_too(monkeypatch, tmp_path) -> None:
+    _calls_recorder(monkeypatch, tmp_path)
+    (tmp_path / "grub.cfg").write_text("linux /vmlinuz-linux\n", encoding="utf-8")
+    _stream_failing_nth(monkeypatch, {"cp": 2})
+    with pytest.raises(RuntimeError, match="does not reference selected kernel; the rollback FAILED too"):
+        engine.select_kernel("lts")
+
+
+def test_grub_defaults_that_cannot_be_read_are_a_plain_message_not_a_traceback(monkeypatch, tmp_path) -> None:
+    calls = _calls_recorder(monkeypatch, tmp_path)
+    monkeypatch.setattr(engine, "GRUB_DEFAULT_PATH", tmp_path / "missing" / "grub")
+    with pytest.raises(RuntimeError, match="GRUB could not be read.*left untouched"):
+        engine.select_kernel("lts")
+    assert [argv[1] for argv in calls] == ["pacman"], "only the package was installed"
+
+
+def test_the_cli_and_the_screen_report_an_oserror_plainly(monkeypatch, capsys) -> None:
+    def broken(profile, dry_run=False):
+        raise PermissionError(13, "Permission denied", "/etc/default/grub")
+
+    monkeypatch.setattr(cli, "select_kernel", broken)
+    assert cli.main(["kernel", "lts", "--yes"]) == 1
+    assert "Permission denied" in capsys.readouterr().err

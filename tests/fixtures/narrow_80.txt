@@ -1,0 +1,14 @@
+ UPDATE DAY                                                     Thu 08.10 04:09 
+
+ PACKAGE                             AVAILABLE               FROM
+ a-package-with-a-really-long-name-… 20260301.654321.fedcba… REPO
+ discord-canary                      1.0.2140-1              AUR · BY HAND
+
+ TOTAL    1 from repositories · 1 from AUR (by hand: yay -Sua)
+
+ MACHINE  fine · 8 checks
+ PENDING  nothing since last time
+
+ UPDATE NOW?  [y] yes   [N] not now   Enter means no
+
+ l last run · k kernel

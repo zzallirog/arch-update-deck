@@ -1,0 +1,14 @@
+ UPDATE DAY                                                                         Thu 08.10 04:09 
+
+ PACKAGE           INSTALLED   AVAILABLE   FROM
+ zen-browser-bin   1.23b-1     1.23.1b-1   REPO
+
+ TOTAL    1 from repositories
+
+ MACHINE  disk space: 5.1 GiB free, 6 GiB needed
+ PENDING  root access → arch-update auto --sudoers
+          repo → sudo pacman -Syu
+
+ UPDATE NOW?  [y] yes   [N] not now   Enter means no
+
+ l last run · k kernel

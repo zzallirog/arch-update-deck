@@ -1,0 +1,6 @@
+ UPDATE DAY                                                                         Thu 08.10 04:09 
+
+ checking   machine is fine
+ updating   repositories …
+
+ running …

@@ -1,0 +1,8 @@
+ UPDATE DAY                                                                         Thu 08.10 04:09 
+
+ TOTAL    cannot read the repositories: install pacman-contrib
+
+ MACHINE  fine · 8 checks
+ PENDING  nothing since last time
+
+ nothing is asked while the queue cannot be read; by hand: sudo pacman -S pacman-contrib

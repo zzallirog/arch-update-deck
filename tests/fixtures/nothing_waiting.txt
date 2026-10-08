@@ -1,0 +1,7 @@
+ UPDATE DAY                                                                         Thu 08.10 04:09 
+
+ TOTAL    nothing waiting
+
+ MACHINE  fine · 8 checks
+ PENDING  nothing since last time
+ weekly update is off: arch-update schedule --install-auto

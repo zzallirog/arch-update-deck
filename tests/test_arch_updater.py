@@ -4,13 +4,11 @@ import pytest
 from test_auto import box  # noqa: F401 - a fixture
 
 from arch_updater.engine import (
-    CommandResult,
     attest,
     classify_failures,
     grub_default_entry,
     privilege_command,
     quarantine_missing_aur_caches,
-    run_update,
 )
 from arch_updater.transcripts import _codex_command, _execution_session_ids, classify_command, redact
 
@@ -78,42 +76,6 @@ def test_does_not_quarantine_valid_or_indirect_aur_paths(tmp_path: Path, monkeyp
     assert quarantine_missing_aur_caches(output, "test-run") == []
     assert valid.is_dir()
     assert indirect.is_dir()
-
-
-def test_aur_update_recovers_missing_cache_once_and_keeps_initial_failure(tmp_path: Path, monkeypatch) -> None:
-    cache_root = tmp_path / "cache"
-    package = cache_root / "yay" / "example-app-git"
-    package.mkdir(parents=True)
-    state_root = tmp_path / "state"
-    initial_output = f" -> error downloading sources: {package} \n"
-    calls: list[list[str]] = []
-    responses = iter(
-        [
-            CommandResult(["yay", "-Sua"], 1, initial_output),
-            CommandResult(["yay", "-Sua"], 0, "installed"),
-        ]
-    )
-    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root))
-    monkeypatch.setattr("arch_updater.engine.STATE_ROOT", state_root)
-    monkeypatch.setattr("arch_updater.engine._preflight", lambda *_args, **_kwargs: {"failed_units": {}})
-    monkeypatch.setattr("arch_updater.engine.attest", lambda *_args, **_kwargs: {"healthy": True, "snapshot": {}})
-    monkeypatch.setattr("arch_updater.engine.shutil.which", lambda name: "/usr/bin/yay" if name == "yay" else None)
-
-    def fake_stream(argv, _log_path, dry_run=False):
-        calls.append(argv)
-        return next(responses)
-
-    monkeypatch.setattr("arch_updater.engine.stream_command", fake_stream)
-
-    report = run_update("aur")
-
-    assert report["failed"] is False
-    assert len(calls) == 2
-    assert report["commands"][0]["attempt"] == "initial"
-    assert report["commands"][0]["returncode"] == 1
-    assert report["commands"][1]["attempt"] == "recovery-retry"
-    assert report["commands"][1]["recovered_caches"][0]["package"] == "example-app-git"
-    assert (cache_root / "yay" / f"example-app-git.quarantine-{report['run_id']}").is_dir()
 
 
 def test_project_assets_exist() -> None:
@@ -222,7 +184,9 @@ def test_attest_ignores_polkit_helper_delta(monkeypatch) -> None:
     assert all("polkit-agent-helper" not in message for message in messages)
 
 
-def test_help_lists_every_command_and_prints_no_suppress_marker(capsys) -> None:
+def test_help_lists_the_commands_in_order_one_plain_line_each_and_none_of_the_old_menu(capsys) -> None:
+    import re
+
     import pytest
 
     from arch_updater.main import main
@@ -231,19 +195,39 @@ def test_help_lists_every_command_and_prints_no_suppress_marker(capsys) -> None:
         main(["--help"])
     text = capsys.readouterr().out
     assert "==SUPPRESS==" not in text
-    assert "patrol" in text
+    listed = re.findall(r"^    (\S+)\s{2,}\S", text, re.MULTILINE)
+    assert listed == ["status", "kernel", "attest", "auto", "schedule", "patrol", "share-report", "vault", "cve", "scan-sessions"]
+    for gone in ("menu", "preview", "snapshot-json", "search", "plan", "run"):
+        with pytest.raises(SystemExit):
+            main([gone])
+        capsys.readouterr()
 
 
 def test_a_queue_that_cannot_be_read_is_unknown_not_zero(monkeypatch) -> None:
     from arch_updater import engine
-    from arch_updater.ui import render_status_page
+    from arch_updater.main import render_status
 
     monkeypatch.setattr(engine.shutil, "which", lambda tool: None)
     pending = engine._pending_updates()
     assert pending["repo"] is None and pending["notes"]["repo"] == "cannot check: install pacman-contrib"
     state = _snapshot(updates=pending, root={"free_bytes": 10**11}, pacman_lock=False)
-    page = render_status_page(state)
+    page = render_status(state)
     assert "repos ?" in page and "install pacman-contrib" in page
+
+
+def test_status_and_the_patrol_read_the_aur_queue_from_paru_when_it_is_the_only_helper(monkeypatch) -> None:
+    from arch_updater import engine
+    from arch_updater.engine import CommandResult
+
+    asked = []
+    present = {"checkupdates", "paru"}
+    monkeypatch.setattr(engine.shutil, "which", lambda tool: f"/usr/bin/{tool}" if tool in present else None)
+    monkeypatch.setattr(engine, "run_capture", lambda argv, timeout=30: asked.append(argv) or CommandResult(argv, 0, "a 1 -> 2\n" if argv[0] == "paru" else ""))
+    pending = engine._pending_updates()
+    assert ["paru", "-Qua"] in asked and ["yay", "-Qua"] not in asked
+    assert pending["aur"] == 1 and pending["notes"] == {}
+    present.clear()
+    assert engine._pending_updates()["notes"]["aur"] == "no AUR helper (yay or paru) installed"
 
 
 def test_installer_replaces_the_package_quotes_exec_and_warns_about_path(tmp_path) -> None:
@@ -264,7 +248,7 @@ def test_installer_replaces_the_package_quotes_exec_and_warns_about_path(tmp_pat
     assert not (share / "arch_updater/removed_upstream.py").exists() and not (share / "vault").exists()
     assert (share / "arch_updater/data/failure-modes.json").is_file() and (share / "arch_updater/control.tis").is_file()
     assert (share / "LICENSE").read_text() == (root / "LICENSE").read_text()  # the README links it
-    assert f'Exec="{prefix}/bin/arch-update" menu' in (prefix / "share/applications/arch-update.desktop").read_text()
+    assert f'Exec=env ARCH_UPDATE_HOLD=1 "{prefix}/bin/arch-update"\n' in (prefix / "share/applications/arch-update.desktop").read_text()
     assert "not in your PATH" in first.stderr and "not in your PATH" in second.stderr
     env["PATH"] += f":{prefix}/bin"
     assert "not in your PATH" not in install().stderr
@@ -294,40 +278,6 @@ def test_a_built_wheel_carries_the_data_files_and_one_version(tmp_path) -> None:
     assert wheel.name.startswith(f"arch_update_deck-{__version__}-")
     names = zipfile.ZipFile(wheel).namelist()
     assert {"arch_updater/data/failure-modes.json", "arch_updater/data/profiles.json", "arch_updater/control.tis"} <= set(names)
-
-
-def _preflight_machine(monkeypatch, tmp_path, free_gib: float, after_gib: float | None = None):
-    from arch_updater import engine
-
-    ran: list[list[str]] = []
-    freed = {"now": free_gib}
-    monkeypatch.setattr(engine, "snapshot", lambda **_kwargs: {"pacman_lock": False, "root": {"free_bytes": int(free_gib * 1024**3)}})
-    monkeypatch.setattr(engine, "run_capture", lambda argv, **_kwargs: CommandResult(list(argv), 0, ""))
-    monkeypatch.setattr(engine, "privilege_command", lambda: "sudo")
-
-    def fake_stream(argv, log_path, dry_run=False):
-        ran.append(list(argv))
-        freed["now"] = free_gib if after_gib is None else after_gib
-        return CommandResult(list(argv), 0, "")
-
-    monkeypatch.setattr(engine, "stream_command", fake_stream)
-    monkeypatch.setattr(engine.shutil, "disk_usage", lambda _path: type("U", (), {"free": int(freed["now"] * 1024**3)})())
-    return engine, ran
-
-
-def test_interactive_run_cleans_with_paccache_rk1_between_four_and_six_gib(monkeypatch, tmp_path) -> None:
-    engine, ran = _preflight_machine(monkeypatch, tmp_path, 5.0, after_gib=7.0)
-    engine._preflight("r", True, tmp_path / "run.log")
-    assert ran == [["sudo", "paccache", "-rk1"]]
-
-
-def test_the_hard_floor_of_four_gib_stops_a_run_even_after_cleaning(monkeypatch, tmp_path) -> None:
-    import pytest
-
-    engine, ran = _preflight_machine(monkeypatch, tmp_path, 5.0, after_gib=3.5)
-    with pytest.raises(RuntimeError, match="hard floor"):
-        engine._preflight("r", True, tmp_path / "run.log")
-    assert ran == [["sudo", "paccache", "-rk1"]]
 
 
 def test_the_unattended_look_refuses_below_six_gib(box) -> None:

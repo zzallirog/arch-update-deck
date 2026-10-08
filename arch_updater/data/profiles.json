@@ -36,12 +36,5 @@
       "package": "linux-lts",
       "headers": "linux-lts-headers"
     }
-  ],
-  "update_modes": [
-    {"id": "full", "label": "Full: repos + AUR + attest"},
-    {"id": "repo", "label": "Official repositories only"},
-    {"id": "aur", "label": "AUR only"},
-    {"id": "attest", "label": "Health / reboot boundary only"}
   ]
 }
-

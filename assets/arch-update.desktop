@@ -2,7 +2,7 @@
 Type=Application
 Name=Arch Update Deck
 Comment=Safe, supervised Arch Linux updates
-Exec="@EXEC@" menu
+Exec=env ARCH_UPDATE_HOLD=1 "@EXEC@"
 Terminal=true
 Icon=system-software-update
 Categories=System;

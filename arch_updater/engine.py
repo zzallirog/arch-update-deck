@@ -9,18 +9,16 @@ import signal
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 
 DATA_DIR = Path(__file__).resolve().parent / "data"  # shipped inside the package, so a wheel carries it
 CONFIG_PATH = DATA_DIR / "profiles.json"
 VAULT_PATH = DATA_DIR / "failure-modes.json"
 STATE_ROOT = Path(os.environ.get("ARCH_UPDATER_STATE", Path.home() / ".local/state/arch-updater"))
-HARD_FREE_BYTES = 4 * 1024**3
 GRUB_DEFAULT_PATH = Path("/etc/default/grub")
 GRUB_CFG_PATH = Path("/boot/grub/grub.cfg")
 SOFT_FREE_BYTES = 6 * 1024**3
@@ -189,9 +187,20 @@ def is_transient_helper_unit(name: str) -> bool:
     return name.startswith(TRANSIENT_UNIT_PREFIXES)
 
 
+AUR_HELPERS = ("yay", "paru")  # the first one installed reads the AUR queue, here and on Update Day alike
+
+
+def read_aur_queue(has: Callable[[str], bool], capture: Callable[..., CommandResult]) -> tuple[str | None, CommandResult]:
+    """The AUR queue as the first installed helper reports it: (helper, result); (None, 127) when there is none."""
+    helper = next((tool for tool in AUR_HELPERS if has(tool)), None)
+    if helper is None:
+        return None, CommandResult([], 127, "")
+    return helper, capture([helper, "-Qua"], timeout=180)
+
+
 def _pending_updates() -> dict[str, Any]:
     repo = run_capture(["checkupdates"], timeout=120) if shutil.which("checkupdates") else CommandResult([], 127, "")
-    aur = run_capture(["yay", "-Qua"], timeout=120) if shutil.which("yay") else CommandResult([], 127, "")
+    helper, aur = read_aur_queue(lambda tool: shutil.which(tool) is not None, run_capture)
     repo_ok, aur_ok = repo.returncode in {0, 2}, aur.returncode in {0, 1}
     repo_lines = [line for line in repo.output.splitlines() if line.strip()] if repo_ok else []
     aur_lines = [line for line in aur.output.splitlines() if line.strip()] if aur_ok else []
@@ -199,7 +208,7 @@ def _pending_updates() -> dict[str, Any]:
     if not repo_ok:  # a queue that could not be read is unknown, never "0"
         notes["repo"] = "cannot check: install pacman-contrib" if repo.returncode == 127 else f"cannot check: checkupdates exited {repo.returncode}"
     if not aur_ok:
-        notes["aur"] = "no AUR helper (yay) installed" if aur.returncode == 127 else f"cannot check: yay -Qua exited {aur.returncode}"
+        notes["aur"] = "no AUR helper (yay or paru) installed" if helper is None else f"cannot check: {helper} -Qua exited {aur.returncode}"
     return {
         "repo": len(repo_lines) if repo_ok else None,
         "aur": len(aur_lines) if aur_ok else None,
@@ -245,7 +254,10 @@ def detect_kernel() -> dict[str, Any]:
     grub_default = None
     grub_path = GRUB_DEFAULT_PATH
     if grub_path.exists():
-        match = re.search(r'^GRUB_DEFAULT=(?:"([^"]*)"|([^\n#]*))', grub_path.read_text(encoding="utf-8"), re.MULTILINE)
+        try:
+            match = re.search(r'^GRUB_DEFAULT=(?:"([^"]*)"|([^\n#]*))', grub_path.read_text(encoding="utf-8"), re.MULTILINE)
+        except (OSError, UnicodeDecodeError):  # unreadable: the default is unknown, which is what None says
+            match = None
         if match:
             grub_default = (match.group(1) or match.group(2) or "").strip()
     return {
@@ -475,60 +487,11 @@ def attest(before: dict[str, Any] | None = None, after: dict[str, Any] | None = 
     }
 
 
-def slim_verification(verification: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in verification.items() if key != "snapshot"}
-
-
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
-
-
-def _event(run_id: str, stage: str, status: str, **details: Any) -> None:
-    STATE_ROOT.mkdir(parents=True, exist_ok=True)
-    record = {
-        "timestamp": datetime.now().astimezone().isoformat(),
-        "run_id": run_id,
-        "stage": stage,
-        "status": status,
-        **details,
-    }
-    with (STATE_ROOT / "events.jsonl").open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-
-def pacman_lock_report() -> str:
-    lines = [
-        "pacman lock exists: /var/lib/pacman/db.lck",
-        "Do not remove the lock if a package manager is still alive.",
-        "",
-    ]
-    for argv in (["fuser", "-v", "/var/lib/pacman/db.lck"], ["lsof", "/var/lib/pacman/db.lck"]):
-        if not shutil.which(argv[0]):
-            continue
-        result = run_capture(argv)
-        lines.append(f"$ {' '.join(argv)}  (exit {result.returncode})")
-        lines.append(result.output.strip() or "(no output)")
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def planned_update_commands(mode: str, yes: bool = False) -> list[list[str]]:
-    privileged = privilege_command()
-    commands: list[list[str]] = []
-    if mode in {"full", "repo"}:
-        command = [privileged, "pacman", "-Syu"]
-        if yes:
-            command.append("--noconfirm")
-        commands.append(command)
-    if mode in {"full", "aur"}:
-        command = ["yay", "-Sua", "--sudo", privileged]
-        if yes:
-            command.append("--noconfirm")
-        commands.append(command)
-    return commands
 
 
 def aur_cache_root() -> Path:
@@ -573,141 +536,15 @@ def quarantine_missing_aur_caches(output: str, run_id: str) -> list[dict[str, st
     return recovered
 
 
-def build_plan(mode: str, kernel_profile: str = "auto") -> dict[str, Any]:
-    state = snapshot(include_updates=True, include_slow=True)
-    profile = next((item for item in available_kernel_profiles() if item["id"] == kernel_profile), None)
-    return {
-        "mode": mode,
-        "commands": planned_update_commands(mode),
-        "kernel_profile": profile,
-        "detected_kernel": state["kernel"],
-        "preflight": {
-            "pacman_lock": state["pacman_lock"],
-            "root_free_bytes": state["root"]["free_bytes"],
-            "pending_updates": state["updates"],
-        },
-        "mutation_boundary": "No reboot. Kernel selection changes GRUB only when explicitly selected.",
-    }
-
-
-def _preflight(
-    run_id: str,
-    apply: bool,
-    log_path: Path,
-    confirm_cleanup: Callable[[str], bool] | None = None,
-) -> dict[str, Any]:
-    state = snapshot(include_updates=False, include_slow=False)
-    if state["pacman_lock"]:
-        raise RuntimeError("pacman lock exists: /var/lib/pacman/db.lck")
-    db_check = run_capture(["pacman", "-Dk"])
-    if db_check.returncode != 0:
-        raise RuntimeError(f"pacman database check failed: {db_check.output.strip()}")
-    free = state["root"]["free_bytes"]
-    if free < SOFT_FREE_BYTES and apply:
-        prompt = (
-            f"Root has {free / 1024**3:.1f} GiB free (soft floor 6.0 GiB). "
-            "Run paccache -rk1 to drop old package archives?"
-        )
-        if confirm_cleanup is not None and not confirm_cleanup(prompt):
-            raise RuntimeError("preflight cancelled: root space low, cache cleanup declined")
-        _event(run_id, "preflight", "repair", mode="ROOT-SPACE-LOW", free_bytes=free)
-        result = stream_command([privilege_command(), "paccache", "-rk1"], log_path)
-        if result.returncode != 0:
-            raise RuntimeError("package cache cleanup failed")
-        free = shutil.disk_usage("/").free
-    if free < HARD_FREE_BYTES:
-        raise RuntimeError(f"root filesystem below hard floor: {free} bytes free")
-    state["root"]["free_bytes_after_cleanup"] = free
-    return state
-
-
-def run_update(
-    mode: str = "full",
-    dry_run: bool = False,
-    yes: bool = False,
-    confirm_cleanup: Callable[[str], bool] | None = None,
-) -> dict[str, Any]:
-    if mode not in {"full", "repo", "aur", "attest"}:
-        raise ValueError(f"unknown mode: {mode}")
-    run_id = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
-    run_dir = STATE_ROOT / "runs" / run_id
-    log_path = run_dir / "run.log"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    _event(run_id, "run", "started", mode=mode, dry_run=dry_run)
-    before = _preflight(
-        run_id,
-        apply=not dry_run and mode != "attest",
-        log_path=log_path,
-        confirm_cleanup=confirm_cleanup,
-    )
-    _write_json(run_dir / "before.json", before)
-    results: list[dict[str, Any]] = []
-    commands: list[tuple[str, list[str]]] = []
-    if mode in {"full", "repo", "aur"}:
-        for command in planned_update_commands(mode, yes=yes):
-            stage = "aur-update" if command and command[0] == "yay" else "repo-update"
-            if stage == "aur-update" and not shutil.which("yay"):
-                raise RuntimeError("yay is not installed")
-            commands.append((stage, command))
-
-    failed = False
-    for stage, command in commands:
-        _event(run_id, stage, "started", argv=command)
-        result = stream_command(command, log_path, dry_run=dry_run)
-        modes = [item["id"] for item in classify_failures(result.output)]
-        results.append({**asdict(result), "failure_modes": modes, "attempt": "initial"})
-        _event(
-            run_id,
-            stage,
-            "completed" if result.returncode == 0 else "failed",
-            returncode=result.returncode,
-            modes=modes,
-        )
-        if result.returncode != 0:
-            recovered = (
-                quarantine_missing_aur_caches(result.output, run_id)
-                if stage == "aur-update" and "AUR-CACHE-PKGBUILD-MISSING" in modes
-                else []
-            )
-            if recovered:
-                _event(run_id, stage, "recovered-cache", caches=recovered)
-                retry = stream_command(command, log_path, dry_run=dry_run)
-                retry_modes = [item["id"] for item in classify_failures(retry.output)]
-                results.append(
-                    {
-                        **asdict(retry),
-                        "failure_modes": retry_modes,
-                        "attempt": "recovery-retry",
-                        "recovered_caches": recovered,
-                    }
-                )
-                _event(
-                    run_id,
-                    stage,
-                    "completed" if retry.returncode == 0 else "failed",
-                    returncode=retry.returncode,
-                    modes=retry_modes,
-                    recovered_caches=recovered,
-                )
-                if retry.returncode == 0:
-                    continue
-            failed = True
-            break
-
-    verification = attest(before)
-    _write_json(run_dir / "after.json", verification)
-    report = {
-        "run_id": run_id,
-        "mode": mode,
-        "dry_run": dry_run,
-        "commands": results,
-        "failed": failed,
-        "verification": slim_verification(verification),
-    }
-    _write_json(run_dir / "report.json", report)
-    _write_json(STATE_ROOT / "last-run.json", report)
-    _event(run_id, "run", "failed" if failed else "completed", healthy=verification["healthy"])
-    return report
+def _roll_back(privileged: str, backup: str, grub_path: Path, log_path: Path) -> str:
+    """Put the GRUB defaults back from the backup and regenerate the menu; say truthfully how far that got."""
+    restored = stream_command([privileged, "cp", "--", backup, str(grub_path)], log_path)
+    if restored.returncode:
+        return f"the rollback FAILED too (cp exit {restored.returncode}): {grub_path} may still be changed; the backup is {backup}"
+    regenerated = stream_command([privileged, "grub-mkconfig", "-o", str(GRUB_CFG_PATH)], log_path)
+    if regenerated.returncode:
+        return f"{grub_path} was restored from {backup}, but regenerating {GRUB_CFG_PATH} failed (exit {regenerated.returncode}); run: sudo grub-mkconfig -o {GRUB_CFG_PATH}"
+    return "configuration was rolled back"
 
 
 def select_kernel(profile_id: str, dry_run: bool = False) -> dict[str, Any]:
@@ -739,9 +576,12 @@ def select_kernel(profile_id: str, dry_run: bool = False) -> dict[str, Any]:
         }
 
     grub_path = GRUB_DEFAULT_PATH
-    original = grub_path.read_text(encoding="utf-8")
     grub_cfg_path = GRUB_CFG_PATH
-    grub_cfg = grub_cfg_path.read_text(encoding="utf-8", errors="replace") if grub_cfg_path.exists() else ""
+    try:
+        original = grub_path.read_text(encoding="utf-8")
+        grub_cfg = grub_cfg_path.read_text(encoding="utf-8", errors="replace") if grub_cfg_path.exists() else ""
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"kernel {package} is installed, but GRUB could not be read ({exc}); GRUB was left untouched") from exc
     entry = grub_default_entry(package, grub_cfg) or f"Advanced options for Arch Linux>Arch Linux, with Linux {package}"
     replacement = f'GRUB_DEFAULT="{entry}"'
     if re.search(r"^GRUB_DEFAULT=", original, re.MULTILINE):
@@ -770,16 +610,15 @@ def select_kernel(profile_id: str, dry_run: bool = False) -> dict[str, Any]:
         install_grub = stream_command([privileged, "install", "-m", "0644", "--", temporary, str(grub_path)], log_path)
         regenerate = stream_command([privileged, "grub-mkconfig", "-o", str(GRUB_CFG_PATH)], log_path)
         if install_grub.returncode or regenerate.returncode:
-            stream_command([privileged, "cp", "--", backup, str(grub_path)], log_path)
-            stream_command([privileged, "grub-mkconfig", "-o", str(GRUB_CFG_PATH)], log_path)
-            raise RuntimeError("GRUB update failed and configuration was rolled back")
+            raise RuntimeError(f"GRUB update failed; {_roll_back(privileged, backup, grub_path, log_path)}")
     finally:
         Path(temporary).unlink(missing_ok=True)
-    grub_cfg = GRUB_CFG_PATH.read_text(encoding="utf-8", errors="replace")
+    try:
+        grub_cfg = GRUB_CFG_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise RuntimeError(f"GRUB was rewritten, but {GRUB_CFG_PATH} could not be read to check it ({exc}); the backup is {backup}") from exc
     if f"/vmlinuz-{package}" not in grub_cfg:
-        stream_command([privileged, "cp", "--", backup, str(grub_path)], log_path)
-        stream_command([privileged, "grub-mkconfig", "-o", str(GRUB_CFG_PATH)], log_path)
-        raise RuntimeError("bootloader does not reference selected kernel; GRUB_DEFAULT rolled back")
+        raise RuntimeError(f"bootloader does not reference selected kernel; {_roll_back(privileged, backup, grub_path, log_path)}")
     return {
         "changed": True,
         "package": package,
