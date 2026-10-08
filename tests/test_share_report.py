@@ -157,3 +157,13 @@ def test_the_shipped_catalogue_is_official_and_a_shared_case_is_local() -> None:
 
     assert {mode.get("origin") for mode in json.loads(VAULT_PATH.read_text())["modes"]} == {"official"}
     assert share_census([Case(id="LOCAL-1")], "", "")["cases"][0]["origin"] == "local"
+
+
+def test_the_share_button_and_the_package_name_the_same_home() -> None:
+    import tomllib
+    from pathlib import Path
+
+    from arch_updater.share_report import UPSTREAM
+
+    project = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())
+    assert project["project"]["urls"]["Homepage"] == UPSTREAM

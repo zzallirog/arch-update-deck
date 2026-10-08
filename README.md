@@ -48,8 +48,10 @@ saved. A fix that does not hold is not a case.
 From then on, when that failure comes back, the command runs by itself, with
 nobody asked. What you learned is chosen before anything that shipped.
 
-Thirty-two known failures ship with the tool, each with a pattern, a meaning
-and a fix a person can run. Yours join them in `census.json`.
+Thirty-two known failures ship with the tool, each with a meaning and a fix a
+person can run. Twenty carry a pattern that finds them in a command's output;
+the other twelve are raised by the checks themselves. Yours join them in
+`census.json`.
 
 ## Then pass it on
 
@@ -58,9 +60,9 @@ arch-update census           # what this machine learned: [ ] only here · [x] h
 arch-update census --share   # one GitHub issue, filled in, home folder and login taken out; you press Submit
 ```
 
-The tool sends nothing by itself. Right after `learn`, and once in the weekly
-notice, each new fix is offered for sharing a single time, never again;
-`"share": false` in the configuration turns even the offer off.
+The tool sends nothing by itself. Each learned fix is offered for sharing
+once, at the `learn` prompt when you run it in a terminal, and then never
+again; `"share": false` in the configuration turns even the offer off.
 
 This is the ask. It has met one machine so far. Show it yours. Download it,
 break it, fix it, send your census, and let us build one shared base of what

@@ -33,7 +33,7 @@ TELLING = re.compile(r"(?i)\b(error|errors|fail(ed|ure)?|fatal|conflict|denied|n
 LEARNED = "LOCAL-LEARNED-"
 REF = re.compile(r"(refs/(tags|remotes)/)?[A-Za-z0-9_][A-Za-z0-9_./-]*")  # a tag or a branch; never an option, never a path out
 RULES = """- The person's own changes win over upstream wherever both touch the same thing; upstream's changes are kept everywhere else.
-- Dotfiles follow upstream's newest release tag, not its newest commit. The repository's installer always runs after an update, with no terminal.
+- Dotfiles follow upstream's newest release tag, or its branch when the repository is set to track one. The repository's installer, when one is configured, runs after every update, with no terminal.
 - A fix is only finished once it is saved as a census case (below): the next run then replays it by itself, with nobody asked."""
 
 

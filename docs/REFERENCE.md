@@ -59,7 +59,7 @@ read.
 | Header | `UPDATE DAY`, weekday, date and time. |
 | Table | One row per waiting package: `PACKAGE`, `INSTALLED`, `AVAILABLE`, `FROM`. `FROM` is `REPO`, `AUR`, `FLATPAK` or `SNAP`; an AUR row says `AUR · BY HAND` unless `unattended_aur` is `true`. Up to 124 columns wide. On a narrow terminal `INSTALLED` is dropped first, then `AVAILABLE`. If the rows do not fit the height, the table keeps its header, as many rows as fit (at least one) and a line `+ N more`; it never scrolls. |
 | `TOTAL` | How many packages come from each source. `(by hand: yay -Sua)` follows when AUR rows are present and `unattended_aur` is off. A source that could not be read is named in red (`cannot read the repositories: install pacman-contrib` or `checkupdates failed`; `cannot read the snap queue`). `nothing waiting` is printed only when every queue was read and all are empty. |
-| `MACHINE` | `fine · N checks`, where N is the number of verdicts: 8 with no configured conditions, plus one per condition. A failed check is a red line `<check>: <detail>`; the checks and their screen names are in the [table](#sequence-of-the-update). If the root check is the one that fails, you are not root and stdin and stdout are terminals, it counts as passed and the line ends `sudo asks for your password on yes`. If `sudo` is not installed the line is red and says `sudo is not installed: install it, y cannot continue`, and `y` ends with exit status 70. |
+| `MACHINE` | `fine · N checks`, where N is the number of verdicts: 8 with no configured conditions, plus one per condition and one more when `home_bssid` is set. A failed check is a red line `<check>: <detail>`; the checks and their screen names are in the [table](#sequence-of-the-update). If the root check is the one that fails, you are not root and stdin and stdout are terminals, it counts as passed and the line ends `sudo asks for your password on yes`. If `sudo` is not installed the line is red and says `sudo is not installed: install it, y cannot continue`, and `y` ends with exit status 70. |
 | `PENDING` | The problems left by the last real update (`last-auto.json`), one red line each: `<check> → <fix>`. `nothing since last time` if none. When you are at a terminal as a user with `sudo` installed, entries of the cases `NO-ROOT` and `SUDO-TIMESTAMP-EXPIRED` are left out, because `y` asks for the password; `auto --status` still lists them. Notes (the starter-configuration notice; `weekly update is off: arch-update schedule --install-auto` when the weekly timer is known not to be installed) are dim lines under it. |
 | Question | `UPDATE NOW?  [y] yes  [N] not now  Enter means no`, then the dim footer `l last run · k kernel`. |
 
@@ -222,7 +222,7 @@ is caught only by Update Day.
 | `dotfiles [--only PATH] [--suggest] [--add PATH [--install CMD] [--check CMD]]` | Without a flag: brings the repositories under `dotfiles` to their newest release now, whatever their 30 days; exit 1 if one is left broken (with a brief). `--suggest` and `--add`: see [Dotfiles](#dotfiles). |
 | `brief [FOLDER]` | Prints the newest brief with no fix saved, or the one in `FOLDER`. See [Failures that teach](#failures-that-teach). |
 | `learn [--brief FOLDER] --match RE --how TEXT --command CMD` | Runs the fix, checks that it settles the failure, and saves it as a census case; refused (exit 1, nothing saved) otherwise. See [Failures that teach](#failures-that-teach). |
-| `census [--share [--json]]` | Lists the cases this machine recorded or learned: `[ ]` only here, `[x]` already handed upstream, and the count of `*` official ones (shipped with the tool, `"origin": "official"` in the catalogue). `--share` opens one GitHub issue with every case not yet handed upstream filled in (home folder written `~`, login `<user>`, each `"origin": "local"`) and marks them `[x]`; you press Submit, or close the tab. Nothing is chosen case by case, and nothing is sent by the tool itself. Without a desktop it prints the link; `--json` prints every local case as JSON. Sharing is optional and apart from the update: right after `learn`, and in the weekly notice (a click), each new learned fix is offered once, never again; `"share": false` in auto.json turns the offer off. |
+| `census [--share [--json]]` | Lists the cases this machine recorded or learned: `[ ]` only here, `[x]` already handed upstream, and the count of `*` official ones (shipped with the tool, `"origin": "official"` in the catalogue). `--share` opens one GitHub issue with every case not yet handed upstream filled in (home folder written `~`, login `<user>`, each `"origin": "local"`) and marks them `[x]`; you press Submit, or close the tab. Nothing is chosen case by case, and nothing is sent by the tool itself. Without a desktop it prints the link; `--json` prints every local case as JSON. Sharing is optional and apart from the update: each learned fix is offered once, at the `learn` prompt, and is then counted as offered whether you answered or not; a `learn` outside a terminal asks nothing and counts the same. A fix learned with `"share": false` in auto.json, or added to `census.json` by hand, is named once in the weekly notice instead; a click on that notice runs `census --share` when no problem has a `fix` of its own and the AUR was not held. `"share": false` turns the offer off. |
 | `vault [--classify TEXT]` | Prints the shipped catalogue of known failures as JSON, or only the entries whose pattern matches `TEXT`. |
 | `cve` | Prints the `arch-audit` findings as JSON (`available`, `findings`, `count`, `error`). Exit 0 even when `arch-audit` is missing. |
 | `scan-sessions [--output-dir DIR] [--json]` | See [Session scanner](#session-scanner). |
@@ -231,9 +231,11 @@ is caught only by Update Day.
 `auto` passes `--noconfirm` to `pacman`, `yay` and `paru`, and `-y
 --noninteractive` to `flatpak`.
 
-Two flags of `auto` do not appear in `--help`. The timer's service runs
-`arch-update auto --scheduled`, which asks first if `"ask": true` and otherwise
-updates. The window it opens runs `arch-update auto --ask --record`; `--record`
+Three flags of `auto` do not appear in `--help`. The timer's service runs
+`arch-update auto --due` as its condition (exit 0 only when the last visit is 7
+days old) and then `arch-update auto --scheduled`, which asks first if
+`"ask": true` and otherwise updates. The window it opens runs
+`arch-update auto --ask --record`; `--record`
 makes the visit write its answer to `ask-result.json` and exit with the status
 the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
@@ -256,8 +258,9 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
 - New: `arch-update census`. What this machine learned is listed (`[ ]` only
   here, `[x]` handed upstream, `*` official), and `--share` opens one GitHub
   issue with all of it filled in, home folder and login taken out; you press
-  Submit. Each new learned fix is offered once, after `learn` and in the
-  weekly notice; `"share": false` turns that off. The shipped catalogue marks
+  Submit. Each learned fix is offered once, at the `learn` prompt; one learned
+  with `"share": false` is named once in the weekly notice instead. `"share":
+  false` turns the offer off. The shipped catalogue marks
   its cases `"origin": "official"`.
 
 ### Changed in 0.20.0
@@ -522,8 +525,9 @@ The sequence is the program in `arch_updater/control.tis`, executed by
 
 `arch_updater/data/failure-modes.json` is the shipped catalogue (installed under
 `~/.local/share/arch-update-deck/arch_updater/data/`). An entry has an `id`, a
-`match` (a regular expression searched in the failing command's output), a
-`meaning`, a `fix` and optionally a `repair`. The `fix` is one command to run by
+`meaning`, a `fix`, optionally a `repair`, and for twenty of the thirty-two a
+`match` (a regular expression searched in the failing command's output); the
+other twelve have none and are raised by the checks. The `fix` is one command to run by
 hand, on one line, readable by `sh`, with no placeholder. It is never the command
 that just failed: no `fix` is `pacman -Syu`, `yay -Sua`, `paru -Sua`,
 `flatpak update`, `snap refresh` or `arch-update auto` (with or without `sudo`),
@@ -544,6 +548,7 @@ is not repaired:
 | `rebuild-initramfs` | `sudo -n mkinitcpio -P`. |
 | `rebuild-dkms` | `sudo -n dkms autoinstall` (for the running kernel; a kernel installed later is built by its pacman hook). |
 | `rebuild-against-new-libraries` | `yay -S --rebuild` of the `rebuild` packages named in `smoke`. Only with `unattended_aur` on and `yay` installed. |
+| `replay` | The command of a case this machine learned with `arch-update learn`, run with `sh -c` as your user in the folder it was learned in. Counts against the three repairs. See [Failures that teach](#failures-that-teach). |
 
 The update acts on `repair` only. The `stage`, `response`, `automatic` and
 `observed_in` fields in the shipped file are shown by `vault` and read by
@@ -590,13 +595,14 @@ When a store fails and no entry matches its output, the failure is added to
 `~/.local/state/arch-updater/census.json` as a new entry `LOCAL-<hash>`. Its
 `match` is the line that identified the failure (the last line containing
 "error", else the last line) with numbers loosened. Its `fix` is
-`less +G '<path of run.log>'`, the path quoted for the shell, its `meaning` says when and where it was first seen, and
-`seen` counts how often it came back. It is recognised on later runs. It has no
-`repair`, so the store is not retried. To have the failure handled, add a `fix`
-or a `repair` to the entry in `census.json`; do not edit the installed
-catalogue, which `install.sh` overwrites. Only failures of the stores (pacman,
-AUR, Flatpak, Snap) are recorded this way. A failed check is never added to the
-census.
+`arch-update brief`: the brief shows the lines that matter and the `learn`
+command that saves a fix. Its `meaning` says when and where it was first seen,
+and `seen` counts how often it came back. It is recognised on later runs. It has
+no `repair`, so the store is not retried. To have the failure handled, save a
+fix with `arch-update learn` (see [Failures that teach](#failures-that-teach)):
+the learned case replaces this entry. Do not edit the installed catalogue, which
+`install.sh` overwrites. Only failures of the stores (pacman, AUR, Flatpak, Snap)
+are recorded this way. A failed check is never added to the census.
 
 ## Schedule and ask mode
 
@@ -727,10 +733,12 @@ Requirements of ask mode:
 If `notify-send` exists, every update that is not a dry run sends a desktop
 notification, including one started with `y`: the state and the problems, each
 with its `fix`. A skipped run (status 80) sends one too. Urgency is critical
-unless the status is 0, 10, 80 or 130.
+unless the status is 0, 10, 80 or an interrupt (129, 130, 143).
 
 Clicking the notification opens a terminal on the `fix` of the first problem
-that has one, or on `yay -Sua` if only the AUR was held. This needs a terminal
+that has one, or on `yay -Sua` if only the AUR was held, or on
+`arch-update census --share` if nothing hangs and a learned fix has not been
+offered upstream yet. This needs a terminal
 found as described above, `systemd-run`, and a `notify-send` that supports
 `--wait` and `--action`. The `fix` runs as your user; those that start with
 `sudo` ask for your password in that terminal.
@@ -812,7 +820,7 @@ file `arch-update auto` exits 70.
 | `quiet` | `false` turns off the quiet gate and the ceiling of the timer's run. Default on. See [Quiet](#quiet). |
 | `quiet_pressure` | Limits for the gate, as `{"cpu": 40, "memory": 10, "io": 30}`: the "some avg60" of `/proc/pressure/<kind>` above which the run waits. |
 | `quiet_share` | The timer's run gets one thread of every `quiet_share`-th physical core it may use (default 4: a quarter), at 60 % of a CPU each. |
-| `share` | `false`: never offer to share what this machine learned (`arch-update census --share` still works by hand). Default: each new learned fix is offered once. |
+| `share` | `false`: never offer to share what this machine learned (`arch-update census --share` still works by hand). Default: each learned fix is offered once, at the `learn` prompt. |
 | `dotfiles_every_days` | Days between visits of each dotfiles repository. Default 30. A failed one is tried at the next run. |
 | `dotfiles` | Git repositories to keep at their newest release, after the package stores. Each is a path, or `{"path": "~/dots-hyprland", "install": "./setup install", "check": "...", "track": "release"}`. See [Dotfiles](#dotfiles). Default: none. |
 
@@ -1029,7 +1037,15 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `runs/kernel-<time>/run.log` | Kernel selection. |
 | `last-auto.json` | `report.json` of the last update that was not a dry run, an interrupted one included. Source of `PENDING` and of the `l` key. A run that stopped at a check has this report but no `run.log`. |
 | `last-patrol.json`, `patrol-history.json` | The last patrol, and a summary of the last 12. |
-| `census.json` | Store failures first seen on this machine. |
+| `census.json` | Failures first seen on this machine, and the fixes learned here with `arch-update learn`, for package stores and dotfiles repositories alike. |
+| `census-sent.json` | The local cases already handed to a GitHub issue by `census --share`, listed as `[x]`. |
+| `census-offered.json` | The learned fixes already offered for sharing once. |
+| `briefs/<run>-<store>/` | One folder per failure left standing: `brief.md`, `failure.log`, `meta.json`. See [Failures that teach](#failures-that-teach). |
+| `drift/<repository>.md` | The drift report of each dotfiles repository, rewritten at every visit and by `dotfiles --drift`. |
+| `dotfiles.json` | When each dotfiles repository was last visited and left nothing broken. |
+| `discover.json` | When each suggestion of `dotfiles --suggest` was last named in the weekly notice. |
+| `aur-maintainers.json` | The maintainer of each foreign package when it was last up to date; a change holds its update for you. |
+| `quiet-waiting.json` | Since when the timer's run has been waiting for a quiet machine. |
 | `keep/` | Pre-update records `auto-<time>/`, unless `keep` is set. |
 | `auto.lock` | Lock file for the update. It is created by every run, dry runs included; the lock is the `flock` on it, not the file's existence. |
 | `ask-window.log` | Output of the ask-mode terminal, and the reasons it could not run. |
@@ -1043,7 +1059,7 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `~/.cache/yay/<name>.quarantine-<run id>` | Cache directories set aside by `quarantine-aur-cache`. |
 
 Nothing removes these on its own: `runs/` (every update and every
-`auto --dry-run`; opening Update Day writes none), `ask-window.log`, the `grub.arch-updater-*.bak`
+`auto --dry-run`; opening Update Day writes none), `briefs/`, `drift/`, `ask-window.log`, the `grub.arch-updater-*.bak`
 files and the `*.quarantine-*` directories grow until you delete them. Only
 `keep/` is pruned, to the last four records. Delete a quarantine directory or a
 GRUB backup only after checking that you do not need it.
@@ -1056,7 +1072,7 @@ GRUB backup only after checking that you do not need it.
 | `ARCH_UPDATER_HOME` | Directory that contains the `arch_updater` package; read by the launcher. Default `../share/arch-update-deck` next to it. |
 | `ARCH_UPDATER_PREFIX` | Installation prefix; read by `install.sh` only. Default `~/.local`. |
 | `XDG_CONFIG_HOME` | Where `arch-updater/auto.json` is looked for. Default `~/.config`. |
-| `XDG_CACHE_HOME` | Where the `yay` cache is looked for: by the AUR sudoers rules and by `quarantine-aur-cache`. Default `~/.cache`. |
+| `XDG_CACHE_HOME` | Where the `yay` cache is looked for by `quarantine-aur-cache`. Default `~/.cache`. |
 | `TERMINAL` | Terminal for ask mode and click-to-fix. See [Schedule and ask mode](#schedule-and-ask-mode). |
 | `NO_COLOR` | Turns colour off on Update Day. |
 | `TERM` | `dumb` turns off colour, cursor moves and redraws on Update Day. |
