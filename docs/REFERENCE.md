@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.19.0. Nothing here is needed
+Details for [README.md](../README.md), version 0.19.1. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -235,6 +235,16 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.19.1
+
+- The AUR root shim no longer treats a shared folder as the package's own.
+  pacman lists `usr/share/fonts` as owned by every font package, so an update
+  could place files under it, where `fc-cache` reads them as root. The shim now
+  takes a folder as the package's own only when it carries the package's name,
+  and `fonts`, `fontconfig`, `glib-2.0`, `gtk-*`, `gdk-pixbuf-2.0`, `gio` and
+  `vulkan` are never open. Updates of font packages and other packages that
+  fill shared folders now go the ordinary way, with a password.
 
 ### Changed in 0.19.0
 

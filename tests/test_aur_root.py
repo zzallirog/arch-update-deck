@@ -258,3 +258,15 @@ def test_an_adopted_orphan_is_a_maintainer_change(tmp_path) -> None:
 
 def test_the_cool_down_is_a_week_unless_configured() -> None:
     assert stores.AUR_MIN_AGE_DAYS == 7
+
+
+FONT = {"ttf-x": {"version": "1-1", "conflicts": [], "replaces": [], "provides": [], "paths": [
+    "/usr/", "/usr/share/", "/usr/share/fonts/", "/usr/share/fonts/ttf-x/", "/usr/share/fonts/ttf-x/X.ttf"]}}
+
+
+def test_a_shared_folder_pacman_lists_as_owned_is_not_a_folder_of_its_own(tmp_path) -> None:
+    """pacman -Ql lists usr/share/fonts for any font package; fontconfig.hook runs fc-cache as root over it."""
+    evil = package(tmp_path / "a.pkg.tar.zst", ("usr/share/fonts/zzz-evil/p.ttf", "file", {"data": b"x"}), name="ttf-x")
+    with pytest.raises(aur_root.Refused, match="outside the allowed places"):
+        aur_root.inspect(evil, FONT)
+    assert aur_root.own_folders("ttf-x", FONT["ttf-x"]["paths"]) == {"ttf-x"}

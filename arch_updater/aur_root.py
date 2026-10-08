@@ -68,6 +68,8 @@ SYSTEM = {
     "modprobe.d", "modules", "modules-load.d", "pam.d", "polkit-1", "security", "sysctl.d", "systemd",
     "sysusers.d", "tmpfiles.d", "udev", "xorg", "mime", "X11", "kbd", "factory", "ca-certificates", "pacman",
     "gnupg", "sudo", "cron", "elogind", "NetworkManager", "bluetooth", "cups", "grub", "os-release",
+    # shared roots whose caches pacman hooks rebuild as root (fc-cache, glib-compile-schemas, gtk/gdk caches)
+    "fonts", "fontconfig", "glib-2.0", "gtk-2.0", "gtk-3.0", "gtk-4.0", "gdk-pixbuf-2.0", "gio", "vulkan",
 }
 
 
@@ -76,11 +78,16 @@ class Refused(Exception):
 
 
 def own_folders(pkgname: str, installed_paths: list[str]) -> set[str]:
-    """usr/lib/<x>, usr/share/<x> and usr/include/<x> folders this package may fill: its own name, and what its installed version holds."""
-    names = {pkgname, re.sub(r"-(bin|appimage)$", "", pkgname)}
+    """usr/lib/<x>, usr/share/<x> and usr/include/<x> folders this package may fill: its own name, and what its installed version holds under a name of its own.
+
+    pacman lists every folder on a path as owned, so usr/share/fonts shows up for any font package: a folder
+    from the installed paths counts only when its name is the package's (stem) name, not a shared root.
+    """
+    stem = re.sub(r"^lib32-", "", re.sub(r"-(bin|appimage|git|svn|hg|nightly)$", "", pkgname))
+    names = {pkgname, stem}
     for path in installed_paths:
         parts = path.strip("/").split("/")
-        if len(parts) >= 3 and parts[0] == "usr" and parts[1] in OWN:
+        if len(parts) >= 3 and parts[0] == "usr" and parts[1] in OWN and stem and (parts[2] == stem or parts[2].startswith((stem + "-", stem + "_"))):
             names.add(parts[2])
     return {name for name in names if name and name not in SYSTEM and not name.endswith((".so", ".conf")) and "." not in name[:1]}
 
