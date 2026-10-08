@@ -1,0 +1,16 @@
+"""How an unattended run can end. The number is the process exit status."""
+
+IDLE, READY_FOR_REBOOT, BLOCKED, RECOVERY_PENDING = 0, 10, 20, 30
+NETWORK_BLOCKED, BACKUP_BLOCKED, TOOL_FAILURE, SKIPPED = 40, 50, 70, 80
+NAMES = {
+    IDLE: "IDLE",
+    READY_FOR_REBOOT: "READY_FOR_REBOOT",
+    BLOCKED: "BLOCKED",
+    RECOVERY_PENDING: "RECOVERY_PENDING",
+    NETWORK_BLOCKED: "NETWORK_BLOCKED",
+    BACKUP_BLOCKED: "BACKUP_BLOCKED",
+    TOOL_FAILURE: "TOOL_FAILURE",
+    SKIPPED: "SKIPPED",
+}
+# The exits a configured condition may claim; anything else would let a "no" pass as success.
+CONDITION = (BLOCKED, NETWORK_BLOCKED, BACKUP_BLOCKED)

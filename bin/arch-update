@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+share_dir=${ARCH_UPDATER_HOME:-"$script_dir/../share/arch-update-deck"}
+exec env PYTHONPATH="$share_dir${PYTHONPATH:+:$PYTHONPATH}" python3 -m arch_updater "$@"

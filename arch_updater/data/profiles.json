@@ -1,0 +1,47 @@
+{
+  "kernels": [
+    {
+      "id": "auto",
+      "label": "Keep detected kernel",
+      "package": null,
+      "headers": null
+    },
+    {
+      "id": "cachyos-bore",
+      "label": "CachyOS BORE",
+      "package": "linux-cachyos-bore",
+      "headers": "linux-cachyos-bore-headers"
+    },
+    {
+      "id": "cachyos",
+      "label": "CachyOS default",
+      "package": "linux-cachyos",
+      "headers": "linux-cachyos-headers"
+    },
+    {
+      "id": "arch",
+      "label": "Arch default",
+      "package": "linux",
+      "headers": "linux-headers"
+    },
+    {
+      "id": "zen",
+      "label": "Arch Zen",
+      "package": "linux-zen",
+      "headers": "linux-zen-headers"
+    },
+    {
+      "id": "lts",
+      "label": "Arch LTS",
+      "package": "linux-lts",
+      "headers": "linux-lts-headers"
+    }
+  ],
+  "update_modes": [
+    {"id": "full", "label": "Full: repos + AUR + attest"},
+    {"id": "repo", "label": "Official repositories only"},
+    {"id": "aur", "label": "AUR only"},
+    {"id": "attest", "label": "Health / reboot boundary only"}
+  ]
+}
+

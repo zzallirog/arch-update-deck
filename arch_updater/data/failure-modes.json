@@ -1,0 +1,265 @@
+{
+  "schema": 2,
+  "modes": [
+    {
+      "id": "ROOT-SPACE-LOW",
+      "match": "(?i)(not enough free disk space|no space left on device|partition .* too full)",
+      "stage": "preflight",
+      "meaning": "The transaction cannot retain both old and new package archives.",
+      "response": "Keep two cached versions with paccache -rk2 and remeasure /. The unattended run stops if / is still below 6 GiB free; the interactive update cleans with paccache -rk1 below 6 GiB and stops below 4 GiB.",
+      "automatic": true,
+      "repair": "trim-cache",
+      "fix": "sudo paccache -rk2 && df -h /"
+    },
+    {
+      "id": "PACMAN-REPLACEMENT-CONFLICT",
+      "match": "(?i)(conflicting dependencies|are in conflict)",
+      "stage": "repo-update",
+      "meaning": "A package was replaced, renamed or split while its conflicting predecessor remains installed.",
+      "response": "Name both packages, verify the predecessor's repository and install reason, then use an interactive pacman transaction so the exact removal is visible.",
+      "automatic": false,
+      "fix": "sudo pacman -Syu"
+    },
+    {
+      "id": "MIRROR-STALE-404",
+      "match": "(?i)(failed retrieving file.*404|requested URL returned error: 404)",
+      "stage": "repo-download",
+      "meaning": "A mirror database advertised a package artifact that the same mirror no longer serves.",
+      "response": "Let pacman try the next mirror; if all mirrors fail, refresh mirror state once and rerun the unchanged transaction.",
+      "automatic": true,
+      "repair": "wait-for-mirror",
+      "fix": "sudo pacman -Syyu"
+    },
+    {
+      "id": "AUR-CACHE-UPSTREAM-MISSING",
+      "match": "(?i)(no tracking information|no upstream branch|not currently on a branch)",
+      "stage": "aur-update",
+      "meaning": "The AUR build cache is a broken git checkout, not a package failure.",
+      "response": "Quarantine only that package cache and fetch a clean copy once.",
+      "automatic": false,
+      "fix": "arch-update run --mode aur"
+    },
+    {
+      "id": "AUR-CACHE-PKGBUILD-MISSING",
+      "match": "(?i)(error downloading sources: .*?/yay/[^\\s]+|failed to parse .*\\.SRCINFO:.*no such file)",
+      "stage": "aur-update",
+      "meaning": "yay named one of its cache directories, but that directory has no PKGBUILD to parse.",
+      "response": "Verify the named path is a direct non-symlink yay cache child, quarantine it reversibly, then fetch it cleanly once.",
+      "automatic": true,
+      "repair": "quarantine-aur-cache",
+      "fix": "arch-update run --mode aur"
+    },
+    {
+      "id": "AUR-SOURCE-REMOTE-PREDICATE",
+      "match": "(?i)(is not a clone of|does not match.*url|remote.*mismatch)",
+      "stage": "aur-source",
+      "meaning": "makepkg accepts source repositories by configured origin URL as well as object integrity.",
+      "response": "Restore the PKGBUILD-declared origin URL after an alternate transport fetch; then verify objects.",
+      "automatic": false,
+      "fix": "arch-update run --mode aur"
+    },
+    {
+      "id": "AUR-GIT-LFS-PROTOCOL",
+      "match": "(?i)unknown download protocol: git-lfs",
+      "stage": "aur-source",
+      "meaning": "The PKGBUILD source protocol helper is missing before source preparation.",
+      "response": "Install the declared git-lfs make dependency and retry source preparation once.",
+      "automatic": false,
+      "fix": "sudo pacman -S --needed git-lfs"
+    },
+    {
+      "id": "SUDO-TIMESTAMP-EXPIRED",
+      "match": "(?i)(sudo: a password is required|incorrect password attempts|authentication is required)",
+      "stage": "privilege",
+      "meaning": "A long AUR build outlived terminal-scoped sudo authentication.",
+      "response": "Use pkexec as yay's sudo command or keep authentication alive explicitly; never place a password in argv or logs.",
+      "automatic": false,
+      "fix": "arch-update auto --sudoers"
+    },
+    {
+      "id": "AUR-SPLIT-PACKAGE-GRANULARITY",
+      "match": "(?i)split package",
+      "stage": "aur-install",
+      "meaning": "Installing split outputs one by one can repeatedly prepare the same large source tree.",
+      "response": "Build the pkgbase once and install only the names already present on the machine in one pacman -U transaction.",
+      "automatic": false,
+      "fix": "arch-update run --mode aur"
+    },
+    {
+      "id": "AUR-BUILD-LAYER-FAILURE",
+      "match": "(?i)(failure occurred in build\\(\\)|error making:.*exit status|make: \\*\\*\\*.*Error)",
+      "stage": "aur-build",
+      "meaning": "The PKGBUILD was fetched correctly but its build layer failed; retrying the package manager unchanged cannot repair source or compiler state.",
+      "response": "Capture the first compiler error, keep the failed pkgbase isolated, and continue only independent packages.",
+      "automatic": false,
+      "fix": "arch-update run --mode aur"
+    },
+    {
+      "id": "DKMS-PARTIAL-MODULE-FAILURE",
+      "match": "(?i)(dkms install.*exited [1-9]|bad return status for module build|Error! Bad return status)",
+      "stage": "kernel-attest",
+      "meaning": "The kernel package installed, but at least one out-of-tree module did not build for that kernel.",
+      "response": "List DKMS status per installed kernel and distinguish required GPU/storage modules from optional peripherals before reboot.",
+      "automatic": true,
+      "repair": "rebuild-dkms",
+      "fix": "sudo dkms autoinstall && dkms status"
+    },
+    {
+      "id": "HYPRLAND-ABI-FORK",
+      "match": "(?i)(libhypr[^ ]+\\.so[^ ]*: cannot open|libhypr[^ ]+ => not found|hyprland.*not found)",
+      "stage": "attest",
+      "meaning": "A mixed repo/AUR Hyprland chain crossed a shared-library SONAME boundary.",
+      "response": "Treat Hyprland, hyprutils, hyprlang, hyprgraphics, aquamarine and the portal as one ABI unit before reboot.",
+      "automatic": false,
+      "fix": "arch-update attest"
+    },
+    {
+      "id": "RUNNING-KERNEL-MODULES-MISSING",
+      "match": "running kernel module directory is missing",
+      "stage": "attest",
+      "meaning": "The old running kernel was replaced on disk; new module loads wait for reboot.",
+      "response": "Do not rebuild the deleted old tree. Verify the new kernel, DKMS and initramfs, then mark reboot required.",
+      "automatic": false,
+      "fix": "systemctl reboot"
+    },
+    {
+      "id": "PACNEW-PENDING",
+      "match": "\\.pacnew$",
+      "classify_output": false,
+      "stage": "attest",
+      "meaning": "Package defaults changed but local configuration remains authoritative.",
+      "response": "Inventory and diff each file; never merge all pacnew files blindly.",
+      "automatic": false,
+      "fix": "sudo pacdiff"
+    },
+    {
+      "id": "NEW-FAILED-UNIT",
+      "match": "new failed unit",
+      "stage": "attest",
+      "meaning": "The update introduced a unit failure relative to the preflight baseline.",
+      "response": "Report only the set difference from the baseline and inspect that unit's current journal.",
+      "automatic": false,
+      "fix": "systemctl --failed; systemctl --user --failed"
+    },
+    {
+      "id": "KERNEL-BOOT-ARTIFACT-MISSING",
+      "match": "kernel boot artifact missing",
+      "stage": "kernel-attest",
+      "meaning": "The kernel package database and its bootable vmlinuz/initramfs surface disagree.",
+      "response": "Regenerate the affected preset and stop before reboot if either artifact remains absent or empty.",
+      "automatic": true,
+      "repair": "rebuild-initramfs",
+      "fix": "sudo mkinitcpio -P"
+    },
+    {
+      "id": "STALE-BOOTLOADER-CONFIG",
+      "match": "bootloader does not reference selected kernel",
+      "stage": "kernel",
+      "meaning": "Kernel files exist but the boot menu cannot select the desired profile.",
+      "response": "Regenerate the detected bootloader configuration and verify the selected vmlinuz path appears.",
+      "automatic": false,
+      "fix": "sudo grub-mkconfig -o /boot/grub/grub.cfg"
+    },
+    {
+      "id": "PACMAN-LOCK",
+      "match": "(?i)unable to lock database",
+      "stage": "watch",
+      "meaning": "Another package manager holds the pacman database, or died holding it.",
+      "response": "Wait for it; never remove the lock while its owner may be alive.",
+      "automatic": true,
+      "repair": "wait-for-lock",
+      "fix": "sudo fuser -v /var/lib/pacman/db.lck"
+    },
+    {
+      "id": "DNS-FAILED",
+      "match": "(?i)(could not resolve host|temporary failure in name resolution)",
+      "stage": "watch",
+      "meaning": "Names do not resolve, so no mirror can be reached.",
+      "response": "Flush the resolver cache and wait; never rewrite resolver configuration.",
+      "automatic": true,
+      "repair": "wait-for-dns",
+      "fix": "resolvectl status"
+    },
+    {
+      "id": "ABI-MISMATCH",
+      "match": "(?i)symbol lookup error",
+      "stage": "watch",
+      "meaning": "A locally built program no longer starts because the libraries it was built against moved.",
+      "response": "Rebuild that package against the libraries installed now.",
+      "automatic": true,
+      "repair": "rebuild-against-new-libraries",
+      "fix": "arch-update run --mode aur"
+    },
+    {
+      "id": "AUR-UNREACHABLE",
+      "match": "",
+      "classify_output": false,
+      "stage": "aur-update",
+      "meaning": "AUR did not say how old its packages are, so none of them is trusted this run.",
+      "response": "Wait and ask again; build nothing until it answers.",
+      "automatic": true,
+      "repair": "wait-for-mirror",
+      "fix": "curl -sI https://aur.archlinux.org/rpc/v5/info"
+    },
+    {
+      "id": "PACMAN-DATABASE",
+      "match": "",
+      "classify_output": false,
+      "stage": "watch",
+      "meaning": "pacman -Dk found the local package database inconsistent.",
+      "response": "Stop before any transaction and read the report by hand.",
+      "automatic": false,
+      "fix": "pacman -Dk"
+    },
+    {
+      "id": "KEEP-UNWRITABLE",
+      "match": "",
+      "classify_output": false,
+      "stage": "watch",
+      "meaning": "The pre-update record has nowhere to land.",
+      "response": "Mount or fix the keep directory; no update runs without its record.",
+      "automatic": false,
+      "fix": "arch-update auto --dry-run"
+    },
+    {
+      "id": "CONDITION",
+      "match": "",
+      "classify_output": false,
+      "stage": "watch",
+      "meaning": "One of the owner's own conditions said no.",
+      "response": "Whatever that condition's command prints is the reason.",
+      "automatic": false,
+      "fix": "arch-update auto --dry-run"
+    },
+    {
+      "id": "NOT-CONFIGURED",
+      "match": "",
+      "classify_output": false,
+      "stage": "watch",
+      "meaning": "This machine has no auto config, so nothing is assumed safe.",
+      "response": "Write the config once.",
+      "automatic": false,
+      "fix": "arch-update auto --init"
+    },
+    {
+      "id": "NO-ROOT",
+      "match": "",
+      "classify_output": false,
+      "stage": "watch",
+      "meaning": "sudo -n does not work, or the run was started as root.",
+      "response": "Install the exact sudoers rules; run as the desktop user.",
+      "automatic": false,
+      "fix": "arch-update auto --sudoers"
+    },
+    {
+      "id": "INTERRUPTED",
+      "match": "",
+      "classify_output": false,
+      "stage": "apply",
+      "meaning": "The run was asked to stop between two stores.",
+      "response": "Run it again.",
+      "automatic": false,
+      "fix": "arch-update auto"
+    }
+  ]
+}

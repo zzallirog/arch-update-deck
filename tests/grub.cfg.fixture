@@ -1,0 +1,13 @@
+menuentry 'Arch Linux' --class arch --class gnu-linux --class gnu --class os {
+        linux /vmlinuz-linux-cachyos-bore
+}
+submenu 'Advanced options for Arch Linux' {
+	menuentry 'Arch Linux, with Linux linux-zen-slim' --class arch {
+		linux /vmlinuz-linux-zen-slim
+	}
+	menuentry 'Arch Linux, with Linux linux-cachyos-bore' --class arch {
+		linux /vmlinuz-linux-cachyos-bore
+	}
+}
+menuentry 'UEFI Firmware Settings' {
+}

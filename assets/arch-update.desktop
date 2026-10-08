@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Arch Update Deck
+Comment=Safe, supervised Arch Linux updates
+Exec="@EXEC@" menu
+Terminal=true
+Icon=system-software-update
+Categories=System;
+Keywords=Arch;Update;Kernel;AUR;

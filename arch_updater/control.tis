@@ -1,0 +1,35 @@
+# The unattended update, as two nodes. One state per node.
+#
+# A token is one number and its sign is the verdict:
+#   + done / green      - failed, the magnitude names a case in the census
+#   0 unknown, blocked, or nothing left
+# Every port answers every round, "nothing" included: silence desyncs the grid.
+
+# Dispatcher. ACC is the last verdict and nothing else.
+@CTL UP=WATCH LEFT=FIX RIGHT=APPLY DOWN=OUT
+WATCH:  MOV UP ACC      # look at the machine as it is now
+        JGZ GREEN
+        JEZ HALT        # unknown is never green
+RED:    MOV ACC LEFT    # negative falls through: a failure the census may know
+        MOV LEFT ACC    # + its known repair was run   0 none on record, or budget spent
+        JGZ WATCH       # a repair is proven by the next look, not by its exit code
+        JMP HALT
+GREEN:  MOV RIGHT ACC   # + something updated   0 nothing left   - an update failed
+        JGZ WATCH       # updated: look again
+        JLZ RED         # failed: the same road as any other failure
+        MOV 1 ACC       # green and nothing left to do
+HALT:   MOV ACC DOWN    # 1 idle   0 blocked
+                        # the run stops at this write to OUT (tis.run halt="OUT"); the wrap to WATCH is never taken
+
+# Repair budget. ACC is repairs left and nothing else; the failure itself
+# passes port to port without being stored.
+@FIX RIGHT=CTL LEFT=CENSUS
+        MOV 3 ACC
+NEXT:   JEZ SPENT
+        SUB 1
+        MOV RIGHT LEFT  # the failure, straight through: has this happened before?
+        MOV LEFT RIGHT  # the census's answer, straight back
+        JMP NEXT
+SPENT:  MOV RIGHT NIL   # every sender must be read
+        MOV 0 RIGHT     # one token a round, even when the answer is no
+        JMP SPENT
