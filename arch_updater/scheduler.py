@@ -34,8 +34,8 @@ RandomizedDelaySec={jitter}
 WantedBy=timers.target
 """
 AUTO_UNIT = "arch-update-auto"
-AUTO_EVERY_DAYS = 3
-AUTO_SCHEDULE = "3min after login, then once a day while the session lasts; a visit only if the last one is 3 days old"
+AUTO_EVERY_DAYS = 7  # owner 2026-10-08: a week for the package stores; dotfiles follow monthly (dotfiles.EVERY_DAYS)
+AUTO_SCHEDULE = "3min after login, then once a day while the session lasts; a visit only if the last one is 7 days old"
 AUTO_SERVICE = """[Unit]
 Description=Arch Update Deck: unattended update, offered at login every few days
 

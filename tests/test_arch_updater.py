@@ -196,7 +196,7 @@ def test_help_lists_the_commands_in_order_one_plain_line_each_and_none_of_the_ol
     text = capsys.readouterr().out
     assert "==SUPPRESS==" not in text
     listed = re.findall(r"^    (\S+)\s{2,}\S", text, re.MULTILINE)
-    assert listed == ["status", "kernel", "attest", "auto", "schedule", "patrol", "share-report", "vault", "cve", "scan-sessions"]
+    assert listed == ["status", "kernel", "attest", "auto", "schedule", "patrol", "share-report", "dotfiles", "brief", "learn", "vault", "cve", "scan-sessions"]
     for gone in ("menu", "preview", "snapshot-json", "search", "plan", "run"):
         with pytest.raises(SystemExit):
             main([gone])

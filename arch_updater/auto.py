@@ -15,13 +15,14 @@ import os
 import re
 import shutil
 import signal
+import threading
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import aur_handoff, census, exits, repairs, stores, tis, watch
+from . import aur_handoff, briefs, census, discover, dotfiles, exits, repairs, stores, tis, watch
 from .cve import scan_cves
 from .engine import STATE_ROOT, CommandResult, _write_json, load_json
 from .exits import Stopped
@@ -39,6 +40,29 @@ AUR_BY_HAND = "yay -Sua"
 # Only then does it open $OPEN (a terminal) on $FIX, and keeps the window until Enter.
 CLICK_SCRIPT = 'choice=$("$@"); [ "$choice" = default ] && exec $OPEN sh -c "$FIX; printf \'\\n[enter] \'; read _"'
 RUN_ID = re.compile(r"auto-\d{8}T\d{6}[+-]\d{4}(-\d+)?")
+
+
+class _Beside(threading.Thread):
+    """Read-only work beside a run, on a daemon thread: one that hangs (a stuck mount) never holds the exit."""
+
+    def __init__(self, work: Callable[..., Any], *args: Any) -> None:
+        super().__init__(daemon=True, name="arch-update-look")
+        self.work, self.args, self.value, self.error = work, args, None, None
+        self.start()
+
+    def run(self) -> None:
+        try:
+            self.value = self.work(*self.args)
+        except Exception as exc:  # noqa: BLE001 - handed to whoever asks for the result
+            self.error = exc
+
+    def result(self, timeout: float) -> Any:
+        self.join(timeout)
+        if self.is_alive():
+            raise TimeoutError("still looking")
+        if self.error is not None:
+            raise self.error
+        return self.value
 
 
 class World:
@@ -61,6 +85,10 @@ class World:
         self.updated: dict[str, int] = {}
         self.held: dict[str, Any] = {}  # what this run deliberately left alone, and why
         self.repairs: list[dict[str, Any]] = []
+        self.outputs: dict[str, str] = {}  # each failed store's whole output
+        self.where: dict[str, str] = {}  # the folder a failed store's fix runs in ("" = home)
+        self.hints: dict[str, list[str]] = {}  # where a person should look, per failed store
+        self.facts: dict[str, dict[str, str]] = {}  # what a brief keeps for `learn` to reproduce a failure (dotfiles: target, rollback)
         self.failure = 0  # the token last written to CENSUS
         self.output = ""  # what the last failed command printed
         self.rebuild: list[str] = []
@@ -167,6 +195,33 @@ class World:
                 continue
             self.done.add(store.name)
             self.failed.pop(store.name, None)
+        wanted = [
+            repo for repo in dotfiles.repos(self.config)
+            if not (self.dry_run or repo.name in self.done or "keep" in self.failed)
+            and not (repo.name in self.failed and not self._case(self.failed[repo.name].case).repair)
+            # a month between visits; a failed one is tried again at the next run
+            and (repo.name in self.failed or dotfiles.due(repo, STATE_ROOT, self.config))
+        ]
+        fetched = dotfiles.prefetch(self, wanted) if wanted and (self.kept or self._keep()) else {}
+        for repo in wanted:
+            if not self.kept:
+                break  # no record, no update
+            self.note("store", name=repo.name, phase="start")
+            outcome = dotfiles.update(self, repo, fetched.get(repo.path))
+            self.note("store", name=repo.name, phase="done", changed=int(outcome.moved), ok=not outcome.case, replayed=outcome.replayed)
+            if outcome.held:
+                self.held.setdefault("dotfiles", []).extend(outcome.held)
+            if outcome.moved:
+                self.updated[repo.name] = self.updated.get(repo.name, 0) + 1
+                self.dirty = moved = True
+            if outcome.case:
+                self.where[repo.name], self.hints[repo.name] = str(repo.path), outcome.look
+                self.facts[repo.name] = {"target": outcome.target, "rollback": outcome.rollback}
+                self._fail(repo.name, self._case(outcome.case), outcome.output)
+                continue
+            self.done.add(repo.name)
+            self.failed.pop(repo.name, None)
+            dotfiles.visited(repo, STATE_ROOT)
         if self.failed:
             # Hand the census the failure it can do something about, if there is one.
             verdict = next((item for item in self.failed.values() if self._case(item.case).repair), next(iter(self.failed.values())))
@@ -200,14 +255,31 @@ class World:
 
     def _recognise(self, output: str, where: str) -> census.Case:
         """The census case this failure belongs to; a failure nobody has seen becomes a new one."""
-        case = census.recognise(self.cases, output)
+        case = census.recognise(self.cases, output, where)
         if case is None:
             return census.record(self.cases, STATE_ROOT, output, where, self.run_dir / "run.log")
         census.met_again(self.cases, STATE_ROOT, case)
         return case
 
     def _fail(self, store: str, case: census.Case, detail: str) -> None:
+        self.outputs[store] = detail  # whole, for the brief
         self.failed[store] = Verdict(store, "fail", case.id, detail.strip()[-300:])
+
+    def write_briefs(self) -> dict[str, str]:
+        """For each failure still standing at the end: a brief for whoever fixes it (briefs.py). Store name to folder."""
+        written: dict[str, str] = {}
+        if self.dry_run or self.run_dir is None:
+            return written
+        for store, verdict in self.failed.items():
+            case = next((item for item in self.cases if item.id == verdict.case), census.Case(id=verdict.case))
+            output = self.outputs.get(store, verdict.detail)
+            look = self.hints.get(store)
+            folder = briefs.write(
+                store, case, output, self.run_id, self.run_dir / "run.log", self.where.get(store, ""), look, self.cases, STATE_ROOT,
+                retry_for(store, self.where.get(store, ""), self.sh), self.facts.get(store),
+            )
+            written[store] = str(folder)
+        return written
 
     def _census(self) -> int:
         """Has this failure happened before, and is there a repair on record for it?"""
@@ -349,6 +421,8 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
     body = body or f"updated: {report['updated'] or 'nothing'}"
     if report["held"]:
         body += f" · held: {', '.join(report['held'])}"
+    if report.get("offers"):
+        body += f" · could also follow: {', '.join(offer['upstream'] for offer in report['offers'])} (arch-update dotfiles --suggest)"
     quiet = report["exit_code"] in (exits.IDLE, exits.READY_FOR_REBOOT, exits.SKIPPED) or exits.interrupted(report["exit_code"])
     urgency = "normal" if quiet else "critical"
     notice = ["notify-send", f"--urgency={urgency}", f"arch-update auto: {report['state']}", body[:400]]
@@ -417,11 +491,14 @@ def run_auto(
         world = World(sh, None, [], run_id, run_dir, dry_run=dry_run)
         world.watcher = watcher or world.watcher
         out, crash, previous, cve = 0, None, None, {"known": False, "error": "not scanned"}
+        looking = None
         try:
             # On SIGTERM the command in flight is left to finish and no new one starts; the run then ends as interrupted.
             previous = signal.signal(signal.SIGTERM, lambda number, _frame: (setattr(world, "stop", True), setattr(world, "signum", number)))
             world.cases = census.load(STATE_ROOT)
             world.config = load_json(CONFIG_PATH) if CONFIG_PATH.is_file() else None
+            # What else could be followed is looked for beside the run: it only reads, and is collected at the end.
+            looking = None if dry_run else _Beside(discover.offers, world.config)
             out = tis.run(tis.parse(PROGRAM.read_text(encoding="utf-8")), world, halt="OUT", trace=world.trace, step=step)
             if world.dirty:
                 world.look()  # halted after changing something: describe what was left, decide nothing
@@ -432,6 +509,14 @@ def run_auto(
             world.child_stopped = getattr(stop, "child_stopped", None)
         except Exception as exc:  # whatever broke, the week ends in a report, not a traceback
             out, crash = 0, f"{type(exc).__name__}: {exc}"
+        try:
+            written = world.write_briefs()
+        except OSError:  # a brief that cannot be written must not lose the report
+            written = {}
+        try:  # what else could be followed: offered, never added; a notice at most once a month for each
+            offers = discover.as_dicts(discover.news(looking.result(timeout=60), STATE_ROOT)) if looking is not None else []
+        except Exception:  # noqa: BLE001 - a suggestion that broke is no reason to lose the week's report
+            offers = []
         code = 128 + world.signum if world.interrupted else exits.TOOL_FAILURE if crash else exit_code(out, world)
         report = {
             "run_id": run_id,
@@ -445,10 +530,11 @@ def run_auto(
             "state": "DRY_RUN" if dry_run else exits.NAMES[code],
             "looks": world.looks,
             "crash": crash,
-            "trouble": _trouble(world) if out <= 0 else [],
+            "trouble": [{**item, "brief": written.get(item["probe"])} for item in _trouble(world)] if out <= 0 else [],
             "verdicts": [asdict(verdict) for verdict in world.verdicts],
             "updated": world.updated,
             "held": world.held,
+            "offers": offers,
             "repairs": world.repairs,
             "pacnew": world.pacnew,
             "reboot_required": world.reboot,
@@ -469,6 +555,79 @@ def run_auto(
         return report
 
 
+def retry_for(store: str, where: str = "", sh: Shell | None = None) -> list[str] | None:
+    """The command that redoes a store's step, built here from the store's name, never read from a file.
+
+    A brief lives in a folder the account can write; what `learn` runs (and may ask a password for) must not.
+    """
+    sh = sh or Shell()
+    if store.startswith("dotfiles:"):
+        return [sh.path("arch-update"), "dotfiles", "--only", where] if where else None
+    for candidate in stores.STORES:
+        if candidate.name == store and sh.has(candidate.tool):
+            argv = list(candidate.update)
+            if candidate.name == "aur":
+                argv += aur_handoff.flags(sh.path("arch-update"))
+            return repairs.sudo(argv) if candidate.root else argv
+    return None
+
+
+def follow(path: str, install: str | None = None, check: str | None = None) -> str:
+    """Add one clone under "dotfiles" in auto.json. Refused unless it is a git repository with an origin."""
+    folder = Path(path).expanduser().resolve()
+    if not (folder / ".git").exists() or not discover._origin(folder):
+        raise ValueError(f"{folder} is not a git clone with an origin")
+    config = load_json(CONFIG_PATH) if CONFIG_PATH.is_file() else dict(STARTER_CONFIG)
+    entries = [entry for entry in config.get("dotfiles") or [] if str(Path(entry if isinstance(entry, str) else entry["path"]).expanduser()) != str(folder)]
+    entry: dict[str, Any] = {"path": str(folder)}
+    entry.update({key: value for key, value in (("install", install), ("check", check)) if value})
+    config["dotfiles"] = [*entries, entry]
+    _write_json(CONFIG_PATH, config)
+    return f"following {folder}" + (f", installer: {install}" if install else ", no installer") + f" (in {CONFIG_PATH})\n"
+
+
+def show_drift(only: str | None = None, sh: Shell | None = None) -> str:
+    """Each followed repository: how far behind, and the report with git's own picture of what your edits hold back."""
+    config = load_json(CONFIG_PATH) if CONFIG_PATH.is_file() else None
+    wanted = [repo for repo in dotfiles.repos(config) if only is None or repo.path == Path(only).expanduser()]
+    if not wanted:
+        return f"no repository under \"dotfiles\" in {CONFIG_PATH}\n"
+    world = World(sh or Shell(), config, [], "drift", None, dry_run=True)
+    return "".join(dotfiles.measure(world, repo) + "\n" for repo in wanted)
+
+
+def run_dotfiles(only: str | None = None, sh: Shell | None = None) -> int:
+    """The dotfiles step alone, by hand or as the retry `arch-update learn` runs. 0 when every repository is fine."""
+    sh = sh or Shell()
+    config = load_json(CONFIG_PATH) if CONFIG_PATH.is_file() else None
+    wanted = [repo for repo in dotfiles.repos(config) if only is None or repo.path == Path(only).expanduser()]
+    if not wanted:
+        print(f"arch-update: no such repository under \"dotfiles\" in {CONFIG_PATH}")
+        return 1
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    with (STATE_ROOT / "auto.lock").open("a", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("arch-update: another run holds the lock")
+            return exits.SKIPPED
+        run_id, run_dir = _new_run_dir(datetime.now().astimezone().strftime("auto-%Y%m%dT%H%M%S%z"))
+        world = World(sh, config, census.load(STATE_ROOT), run_id, run_dir)
+        for repo in wanted:
+            outcome = dotfiles.update(world, repo)
+            state = outcome.case or ("moved to " + outcome.target if outcome.moved else "up to date")
+            print(f"{repo.name}: {state}" + (f" (replayed {', '.join(outcome.replayed)})" if outcome.replayed else ""))
+            if outcome.case:
+                world.where[repo.name], world.hints[repo.name] = str(repo.path), outcome.look
+                world.facts[repo.name] = {"target": outcome.target, "rollback": outcome.rollback}
+                world._fail(repo.name, world._case(outcome.case), outcome.output)
+            else:
+                dotfiles.visited(repo, STATE_ROOT)
+        for store, folder in world.write_briefs().items():
+            print(f"  brief: {folder}/brief.md")
+        return 1 if world.failed else 0
+
+
 def status() -> str:
     """What still hangs from the last run, one line each, with the command that fixes it."""
     path = STATE_ROOT / "last-auto.json"
@@ -479,7 +638,11 @@ def status() -> str:
     lines = [f"{report['state']} · {report['finished_at'][:16]} · updated {report['updated'] or 'nothing'}"]
     if report.get("crash"):
         lines.append(f"  crash: {report['crash']}")
-    lines += [f"  {item['probe']}: {item['case']} — {cause(item['detail']) or item['meaning']}\n    fix: {item['fix']}" for item in report["trouble"]]
+    lines += [
+        f"  {item['probe']}: {item['case']} — {cause(item['detail']) or item['meaning']}\n    fix: {item['fix']}"
+        + (f"\n    brief: {item['brief']}/brief.md (arch-update brief)" if item.get("brief") else "")
+        for item in report["trouble"]
+    ]
     lines += [f"  held {name}: {why if isinstance(why, str) else ', '.join(why)}" for name, why in report["held"].items()]
     lines += [f"  pacnew: {path}\n    fix: sudo pacdiff" for path in report["pacnew"]]
     if report["reboot_required"]:

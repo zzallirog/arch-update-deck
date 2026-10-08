@@ -260,6 +260,57 @@
       "response": "The run was stopped (Ctrl-C or a signal) and nothing new was started. Open arch-update and answer yes again.",
       "automatic": false,
       "fix": "arch-update"
+    },
+    {
+      "id": "DOTFILES-UNSAVED",
+      "match": "",
+      "classify_output": false,
+      "stage": "dotfiles",
+      "meaning": "Your uncommitted changes in the repository could not be committed (a hook, signing, a lock), so nothing was merged.",
+      "response": "The repository is as it was, your changes uncommitted. The brief has git's own words; once a commit works there, the next run goes on.",
+      "automatic": false,
+      "fix": "arch-update brief"
+    },
+    {
+      "id": "DOTFILES-NOT-A-REPO",
+      "match": "",
+      "classify_output": false,
+      "stage": "dotfiles",
+      "meaning": "A path under \"dotfiles\" in auto.json is not a git repository.",
+      "response": "Correct the path in auto.json, or clone the repository there.",
+      "automatic": false,
+      "fix": "${EDITOR:-nano} ~/.config/arch-updater/auto.json"
+    },
+    {
+      "id": "DOTFILES-FETCH",
+      "match": "",
+      "classify_output": false,
+      "stage": "dotfiles",
+      "meaning": "The repository's upstream could not be fetched, or has neither a release tag nor a branch.",
+      "response": "Nothing in the repository was changed. The next run fetches again.",
+      "automatic": true,
+      "repair": "wait-for-dns",
+      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\""
+    },
+    {
+      "id": "DOTFILES-CONFLICT",
+      "match": "",
+      "classify_output": false,
+      "stage": "dotfiles",
+      "meaning": "The merge of the new release could not be finished: neither the person's side winning nor a case learned before settled it.",
+      "response": "The merge was undone and the repository is as it was before the run (tag arch-update/before-<run>). The brief names the files and says how to save the fix that works, so the next run replays it.",
+      "automatic": false,
+      "fix": "arch-update brief"
+    },
+    {
+      "id": "DOTFILES-INSTALL",
+      "match": "",
+      "classify_output": false,
+      "stage": "dotfiles",
+      "meaning": "The repository's installer failed after the update, and no case learned before fixed it.",
+      "response": "The repository stays on the new release. The brief holds the installer's telling lines and says how to save the fix that works, so the next run replays it.",
+      "automatic": false,
+      "fix": "arch-update brief"
     }
   ]
 }

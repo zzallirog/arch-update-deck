@@ -7,11 +7,12 @@ does, and the budget in control.tis bounds the retries.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import aur_handoff
+from . import aur_handoff, census
 from .engine import quarantine_missing_aur_caches
 
 if TYPE_CHECKING:
@@ -84,7 +85,18 @@ def rebuild_against_new_libraries(world: World) -> bool:
     return True
 
 
+def replay(world: World) -> bool:
+    """A case this machine learned: run the command that fixed it before, as the account, where it ran then."""
+    case = census.at(world.cases, world.failure)
+    if case is None or not case.fix.strip():
+        return False
+    world.note("replay", case=case.id)
+    world.command(["env", "-C", os.path.expanduser(case.where or "~"), "sh", "-c", case.fix])
+    return True
+
+
 ACTIONS: dict[str, Callable[[World], bool]] = {
+    "replay": replay,
     "wait-for-lock": wait_for_lock,
     "trim-cache": trim_cache,
     "wait-for-dns": wait_for_dns,

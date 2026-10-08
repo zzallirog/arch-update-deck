@@ -155,10 +155,9 @@ def test_the_sudoers_fix_installs_through_a_temporary_file_checked_by_visudo(tmp
         assert "| sudo tee" not in fix, "rules that were never checked are not written to /etc"
 
 
-def test_a_local_case_quotes_the_path_of_its_log(tmp_path) -> None:
-    log = tmp_path / "a run" / "run.log"
-    case = census.record([], tmp_path, UNSEEN, "repo", log)
-    assert case.fix == f"less +G '{log}'"
+def test_a_local_case_sends_a_person_to_its_brief(tmp_path) -> None:
+    case = census.record([], tmp_path, UNSEEN, "repo", tmp_path / "a run" / "run.log")
+    assert case.fix == "arch-update brief"
 
 
 @pytest.mark.parametrize(
@@ -217,7 +216,9 @@ def test_an_unseen_failure_becomes_a_case_and_is_known_the_next_time(box) -> Non
     assert first["exit_code"] == exits.RECOVERY_PENDING
     (probe, case_id), = cases_of(first)
     assert probe == "repo" and case_id.startswith("LOCAL-")
-    assert first["trouble"][0]["fix"].startswith("less +G ") and "88 gigawatts" in first["trouble"][0]["meaning"]
+    assert first["trouble"][0]["fix"] == "arch-update brief" and "88 gigawatts" in first["trouble"][0]["meaning"]
+    brief = Path(first["trouble"][0]["brief"]) / "brief.md"
+    assert "88 gigawatts" in brief.read_text() and "arch-update learn --brief" in brief.read_text()
     box.sh.fail["repo"] = [failed(UNSEEN.replace("0x7f3a", "0x1b2c").replace("88", "121"))]
     second = box.run()
     assert cases_of(second) == [("repo", case_id)], "the same failure with other numbers is the same case"
@@ -751,13 +752,14 @@ def test_the_weekly_unit_runs_this_launcher_and_spares_the_package_manager(tmp_p
     assert "ExecCondition=/opt/deck/bin/arch-update auto --due\n" in service
 
 
-def test_the_visit_is_due_only_when_the_last_one_is_three_days_old(tmp_path, monkeypatch) -> None:
+def test_the_visit_is_due_only_when_the_last_one_is_a_week_old(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(scheduler, "STATE_ROOT", tmp_path)
     assert scheduler.is_due() is True  # no visit on record
     (tmp_path / "ask-result.json").write_text("{}")
     assert scheduler.is_due() is False
-    later = scheduler.datetime.now().astimezone() + scheduler.timedelta(days=3, minutes=1)
-    assert scheduler.is_due(now=later) is True
+    now = scheduler.datetime.now().astimezone()
+    assert scheduler.is_due(now=now + scheduler.timedelta(days=6, hours=23)) is False
+    assert scheduler.is_due(now=now + scheduler.timedelta(days=7, minutes=1)) is True
 
 
 def test_a_logged_command_is_on_disk_before_it_runs_and_does_not_read_stdin(tmp_path) -> None:

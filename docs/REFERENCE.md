@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.19.1. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.0. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -219,6 +219,9 @@ is caught only by Update Day.
 | `schedule [--install-auto] [--install] [--remove-auto] [--remove]` | Without flags, prints the state of both timers as JSON. `--install-auto` and `--install` write the unit files and enable the timer (safe to repeat). `--remove-auto` and `--remove` stop a timer and delete its unit files; removing what is not there succeeds. Exit 1 if systemd refuses. If several flags are given, the first of `--install-auto`, `--install`, `--remove-auto`/`--remove` wins. |
 | `patrol` | Runs the [patrol](#daily-patrol) now and prints its report. |
 | `share-report` | Prints a sanitised summary of the last patrol as JSON (schema `arch-update-share/v1`: health, reboot need, pending counts, CVE count, the names of the issue kinds). It writes nothing and sends nothing. Without a patrol report it exits 1 with `run arch-update patrol first`. |
+| `dotfiles [--only PATH] [--suggest] [--add PATH [--install CMD] [--check CMD]]` | Without a flag: brings the repositories under `dotfiles` to their newest release now, whatever their 30 days; exit 1 if one is left broken (with a brief). `--suggest` and `--add`: see [Dotfiles](#dotfiles). |
+| `brief [FOLDER]` | Prints the newest brief with no fix saved, or the one in `FOLDER`. See [Failures that teach](#failures-that-teach). |
+| `learn [--brief FOLDER] --match RE --how TEXT --command CMD` | Runs the fix, checks that it settles the failure, and saves it as a census case; refused (exit 1, nothing saved) otherwise. See [Failures that teach](#failures-that-teach). |
 | `vault [--classify TEXT]` | Prints the shipped catalogue of known failures as JSON, or only the entries whose pattern matches `TEXT`. |
 | `cve` | Prints the `arch-audit` findings as JSON (`available`, `findings`, `count`, `error`). Exit 0 even when `arch-audit` is missing. |
 | `scan-sessions [--output-dir DIR] [--json]` | See [Session scanner](#session-scanner). |
@@ -235,6 +238,26 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.0
+
+- New: `dotfiles` in auto.json. Git repositories (end-4's dots-hyprland, say)
+  are moved to upstream's newest release tag once a month, your edits merged
+  over it and winning where both changed the same lines, the installer run
+  after every move. See [Dotfiles](#dotfiles). `arch-update dotfiles` runs it
+  now; `--drift` shows what your edits hold back, as git marks it, and the
+  settings upstream now also sets elsewhere; `--suggest` lists what else was
+  installed from git; `--add` follows one.
+- A merged file that no longer parses while yours did is given back to you.
+- A failure still standing at the end of a run leaves a brief
+  (`arch-update brief`); `arch-update learn` fixes, checks and saves the fix as
+  a census case, replayed by itself the next time. See
+  [Failures that teach](#failures-that-teach).
+- The timer's run is quiet: it waits during a game, under pressure or on
+  battery (3 days at most), and runs under a ceiling of cores and quota, not a
+  lower priority. See [Quiet](#quiet).
+- The package stores are updated once a week (was every 3 days).
+- A command past its timeout gets SIGKILL ten seconds after SIGTERM.
 
 ### Changed in 0.19.1
 
@@ -565,9 +588,9 @@ Writes `arch-update-auto.service` and `arch-update-auto.timer` to
 user manager starts (your login, or boot with lingering) and then once a day
 (`OnStartupSec=3min`, `OnUnitInactiveSec=1d`). The service first runs
 `arch-update auto --due` as its `ExecCondition`: exit 0 when the newer of
-`last-auto.json` and `ask-result.json` is 3 days old or neither exists, exit 1
+`last-auto.json` and `ask-result.json` is 7 days old or neither exists, exit 1
 otherwise, and systemd then skips the run without marking the unit failed. A
-"not now" answer counts as a visit, so the question comes back after 3 days, not
+"not now" answer counts as a visit, so the question comes back after 7 days, not
 at the next login. The service runs `arch-update auto --scheduled` with
 `SuccessExitStatus=10 80`, `KillMode=mixed` and `TimeoutStopSec=150min`, so any
 other exit status leaves the unit failed and visible in
@@ -734,12 +757,137 @@ file `arch-update auto` exits 70.
 | `aur_min_age_days` | With `unattended_aur`: leave out packages whose AUR entry changed within this many days. Default 7. |
 | `ask` | `true` makes the timer open Update Day in a terminal before the weekly update. Default `false`. Read only by the timer's run. See [Schedule and ask mode](#schedule-and-ask-mode). |
 | `ask_timeout_minutes` | How long the question waits for an answer, on the timer and by hand. A number greater than 0; anything else falls back to 30. |
+| `quiet` | `false` turns off the quiet gate and the ceiling of the timer's run. Default on. See [Quiet](#quiet). |
+| `quiet_pressure` | Limits for the gate, as `{"cpu": 40, "memory": 10, "io": 30}`: the "some avg60" of `/proc/pressure/<kind>` above which the run waits. |
+| `quiet_share` | The timer's run gets one thread of every `quiet_share`-th physical core it may use (default 4: a quarter), at 60 % of a CPU each. |
+| `dotfiles_every_days` | Days between visits of each dotfiles repository. Default 30. A failed one is tried at the next run. |
+| `dotfiles` | Git repositories to keep at their newest release, after the package stores. Each is a path, or `{"path": "~/dots-hyprland", "install": "./setup install", "check": "...", "track": "release"}`. See [Dotfiles](#dotfiles). Default: none. |
 
 The check that `keep` is "another disk" compares the device number of `keep`
 with that of `/`. Two subvolumes of one btrfs filesystem have different device
 numbers, so a second subvolume on the same physical disk passes the check.
 Choose a directory on a separate physical disk yourself. Without `keep`, the
 record is written to the system disk and the check passes.
+
+## Dotfiles
+
+A repository listed under `dotfiles` (end-4's dots-hyprland, say) is updated
+after the package stores, once per run:
+
+1. `git fetch --tags origin`. The target is the newest release tag (`1.2`,
+   `v0.56.2`; no `-rc` or `-beta`), or upstream's branch when the repository has
+   no release tags or `track` is `branch`. A repository already at the target or
+   ahead of it is left alone.
+2. Your uncommitted changes are committed, the commit is tagged
+   `arch-update/before-<run>`, and a checked-out tag gets the branch
+   `arch-update-local`.
+3. `git merge -X ours <target>`: where you and upstream changed the same lines,
+   your lines win; upstream's other changes come in.
+4. A merge that still fails (a file you changed and upstream deleted, a rename)
+   is checked against the cases this machine learned (below). If none of them
+   settles it, the merge is undone and the repository is reset to the tag.
+   Nothing at all is touched while a merge, rebase, cherry-pick or revert of
+   yours is in progress, or while a file is marked `assume-unchanged` (its
+   edits are invisible to git, so an undo would lose them): `DOTFILES-UNSAVED`.
+5. Every file the merge changed must still parse: `sh -n`, `bash -n`,
+   `zsh -n`, `fish --no-execute`, the Python parser, `qmlformat`, `luac -p`,
+   the PowerShell parser, JSON, TOML (by suffix, or by the `#!` line). One
+   that no longer parses while your version did is given back to you as it
+   was, in a commit of its own; upstream's change to it waits. A kind with no
+   parser installed is not checked.
+6. `install` runs after every update, in the repository, with no terminal.
+7. `check` runs last. A failing check is reported under `held` and stops
+   nothing.
+
+The repositories that are due are fetched at the same time (up to four), before
+the first one is merged; everything after the fetch goes one repository at a
+time. A repository is visited once every `dotfiles_every_days` (30) days; the
+package stores every 7.
+
+Before the installer runs, every `~/.config/<name>` the repository ships as a
+folder is made a folder: a file or a dead link at that name is moved to
+`<name>.arch-update-<run>` (never deleted) and an empty folder takes its place.
+
+Every visit writes a drift report, `drift/<repository>.md` in the state
+directory; `arch-update dotfiles --drift` writes it on demand (after a fetch,
+moving nothing else). It says how many commits and lines you are behind, and
+shows, the way git does (`merge-tree --write-tree` with
+`merge.conflictStyle=zdiff3`: your lines, the base, upstream's lines), every
+place where your edits hold upstream back. It also watches every added line on
+both sides for settings (`key = v`, `key: v`, `export KEY=v`, `set -g key v`,
+`property … key:`): a key you set that upstream now sets somewhere else is
+listed, because git merges that without a conflict and whichever line is read
+last wins; a line of yours that upstream now has itself is listed as yours to
+drop. Your side is never changed by the report. A key set three or more times
+in one diff (`bind`, `exec-once`) is a list, not a setting, and is left out.
+
+`arch-update dotfiles --suggest` lists what else was installed from git: clones
+with an upstream on GitHub, GitLab or Codeberg and an installer at their root,
+and config folders that were copied rather than cloned but name their upstream
+in a README, a LICENSE or links in their files. Your own repositories (your
+login in `~/.config/gh/hosts.yml`) are left out. Nothing is followed until you
+run `arch-update dotfiles --add PATH [--install CMD] [--check CMD]`. The
+weekly run looks for the same in the background and names what is new in its
+notice, at most once a month for each.
+
+## Quiet
+
+The timer's run waits, and exits 80 (SKIPPED, not a failure; the timer asks
+again the next day) when a game runs (`gamescope`, `steam_app_<id>`, `wine`),
+when `/proc/pressure/{cpu,memory,io}` says the machine is busy, or on battery
+(a mains supply that is offline; a desktop has none). It waits 3 days at most:
+then it runs anyway, under the ceiling, and says why. What cannot be read, and a
+setting that makes no sense, counts as "go".
+
+When it runs, it sets a ceiling on its own service, not a priority: a low
+priority only orders the queue, while the total load is what raises the clocks
+and the fans. `systemctl --user set-property --runtime` gives the service a
+quarter of its physical cores, one thread each (`AllowedCPUs`, a cpuset, which
+holds under any scheduler), 60 % of a CPU per core (`CPUQuota`, enforced by
+the kernel's fair scheduler only), `CPUWeight=20`, `IOWeight=20`, then idle I/O
+and nice 10. Everything the run starts inherits them: `sudo`, pacman and its
+hooks, a build. A large AUR build takes longer this way. systemd keeps such a
+runtime property until the next boot, not until the unit stops, so the run
+lifts its ceiling when it ends and lifts any left from before it sets its own;
+the cores are counted from `/sys/devices/system/cpu/online`, not from what the
+process is allowed at that moment. `"quiet": false` lifts a ceiling left
+behind and sets none. An update started by hand has none of this: someone is
+waiting for it.
+
+## Failures that teach
+
+A failure that is still standing at the end of a run leaves a brief in
+`~/.local/state/arch-updater/briefs/<run>-<store>/`. It holds the lines of the
+log that matter (up to 100, numbered, with context), where to look, the known
+cases the output matches, and the command that saves a fix. `arch-update brief`
+prints the newest brief with no fix saved. Read it yourself, or give it to
+whatever assistant you use.
+
+Fix it and save the fix in one step:
+
+```bash
+arch-update learn --match '<regex>' --how '<what was wrong>' --command '<sh command>'
+```
+
+Nothing is saved unless the pattern finds the failure in the brief's
+`failure.log` and the command really fixes it:
+
+- a merge conflict of a dotfiles repository is redone in a throwaway worktree
+  at the tag the repository stood at, the command runs there, and the merge
+  must then be settled. Your repository is only read, and fixing it by hand
+  first proves nothing about the command;
+- anything else: the command runs (in the repository, or the home folder for a
+  package store), then the failed step runs again, built from the store's name
+  (never read from the brief folder, which your account can write); sudo may
+  ask for your password there.
+
+The case goes into the census (`census.json` in the state directory), tied to
+its store, and replaces the unknown case recorded for the same failure. The next
+time the pattern matches that store's output, the command runs by itself: for a
+package store as the repair `replay`, which counts against the run's three
+repairs; for a dotfiles repository inside the merge, install or check step it
+belongs to. A learned case is chosen before every shipped case that matches the
+same output.
 
 ## Exit status
 

@@ -130,7 +130,7 @@ systemctl --user list-timers arch-update-auto.timer
 
 Installs a systemd user timer: it fires 3 minutes after you log in and then once
 a day while the session lasts, and the update (or its question) happens only when
-the last visit is 3 days old; otherwise systemd skips the run quietly.
+the last visit is 7 days old; otherwise systemd skips the run quietly.
 Lingering is not needed: the point is to ask you when you are at the machine.
 
 To be asked first, add `"ask": true` to the configuration. The timer then opens

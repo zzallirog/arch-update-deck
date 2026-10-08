@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, TextIO
 
-from . import auto, exits
+from . import auto, exits, quiet
 from .engine import STATE_ROOT, available_kernel_profiles, load_json, read_aur_queue, select_kernel
 from .keepalive import NOTICE as TICKET_EXPIRED, Keepalive
 from .scheduler import AUTO_UNIT
@@ -783,9 +783,21 @@ def scheduled(sh: Shell | None = None) -> int:
     """
     sh = sh or Shell()
     config = load_json(auto.CONFIG_PATH) if auto.CONFIG_PATH.is_file() else None
+    reason = quiet.gate(config)
+    waiting = quiet.waited(reason, STATE_ROOT)
+    if waiting:  # not a visit: the timer asks again tomorrow, for a few days at most
+        print(f"arch-update: waiting, {waiting}")
+        return exits.SKIPPED
+    if reason:
+        print(f"arch-update: waited {quiet.MAX_WAIT_DAYS} days ({reason}); updating anyway, under the ceiling")
     terminal = sh.terminal() if (config or {}).get("ask") is True else None
     if not terminal:
-        return auto.run_auto(sh=sh)["exit_code"]
+        for line in quiet.calm(config):  # nobody is watching this one: a ceiling, so it is not heard either
+            print(f"arch-update: quiet: {line}")
+        try:
+            return auto.run_auto(sh=sh)["exit_code"]
+        finally:
+            quiet.release()  # systemd would keep it until the next boot
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         _say(sh, f"{terminal[0]} cannot open: no DISPLAY or WAYLAND_DISPLAY in this session; the weekly update was not run. By hand: arch-update auto")
         return exits.BLOCKED

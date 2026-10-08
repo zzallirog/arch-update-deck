@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import shlex
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +32,8 @@ class Case:
     meaning: str = ""
     classify_output: bool = True
     seen: int = 0  # how often this machine met it; only counted for local cases
+    where: str = ""  # a learned case: the folder its fix runs in ("" = home)
+    store: str = ""  # a learned case: the store it was learned on; it answers no other store's failure
 
     def matches(self, output: str) -> bool:
         return bool(self.classify_output and self.match and re.search(self.match, output))
@@ -65,14 +66,17 @@ def at(cases: list[Case], value: int) -> Case | None:
     return cases[index] if 0 <= index < len(cases) else None
 
 
-def recognise(cases: list[Case], output: str) -> Case | None:
+def recognise(cases: list[Case], output: str, store: str | None = None) -> Case | None:
     """The case this output belongs to, or None if it has never been seen.
 
-    When several cases match, one without a repair wins: a failure is only
-    retried when every cause found in it is known to be repairable.
+    A case learned on this machine (`arch-update learn`) wins: it was written
+    for exactly this failure, after a fix that worked. Otherwise, when several
+    cases match, one without a repair wins: a failure is only retried when
+    every cause found in it is known to be repairable.
     """
-    found = [case for case in cases if case.matches(output)]
-    return next((case for case in found if not case.repair), found[0] if found else None)
+    found = [case for case in cases if case.matches(output) and not (case.store and store is not None and case.store != store)]
+    learned = [case for case in found if case.id.startswith("LOCAL-LEARNED-")]
+    return learned[0] if learned else next((case for case in found if not case.repair), found[0] if found else None)
 
 
 def signature(output: str) -> str:
@@ -99,7 +103,7 @@ def record(cases: list[Case], state_root: Path, output: str, where: str, log: Pa
     case = Case(
         id=f"LOCAL-{digest}",
         match=pattern,
-        fix=f"less +G {shlex.quote(str(log))}",
+        fix="arch-update brief",  # the brief points into the log, and says how to save a fix as a case
         meaning=f"first seen {datetime.now().astimezone().date().isoformat()} in {where}: {line}",
         seen=1,
     )

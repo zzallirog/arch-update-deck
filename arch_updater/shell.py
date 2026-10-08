@@ -23,6 +23,7 @@ from .engine import CommandResult, run_capture
 
 # Programs that change the package set or the boot files. A signal in the middle of one leaves a
 # half-applied transaction, so they are never given a time limit, whatever the caller asks for.
+KILL_AFTER = 10  # seconds between a timeout's SIGTERM and its SIGKILL
 TRANSACTION_TOOLS = frozenset({"pacman", "yay", "paru", "paccache", "mkinitcpio", "dkms", "snap", "flatpak", "grub-mkconfig"})
 # Terminals, and what each wants in front of the command it should run. The weekly unit reads the answer when the
 # window's process ends, so each is told to stay in the foreground until the command in it has ended: a terminal
@@ -123,9 +124,15 @@ class Shell:
                     returncode = self._finish(child, getattr(stop, "signum", signal.SIGINT))
                 except subprocess.TimeoutExpired:
                     # Only reached for commands that are not transactions (see above).
-                    with contextlib.suppress(PermissionError, ProcessLookupError):
-                        # Our own group is the person's foreground group: only the child may be signalled there.
-                        child.terminate() if self.shared_session else os.killpg(child.pid, signal.SIGTERM)
+                    for sig in (signal.SIGTERM, signal.SIGKILL):  # one that ignores SIGTERM gets SIGKILL ten seconds later
+                        with contextlib.suppress(PermissionError, ProcessLookupError):
+                            # Our own group is the person's foreground group: only the child may be signalled there.
+                            child.send_signal(sig) if self.shared_session else os.killpg(child.pid, sig)
+                        try:
+                            child.wait(timeout=KILL_AFTER)
+                            break
+                        except subprocess.TimeoutExpired:
+                            continue
                     child.wait()
                     returncode = 124
             handle.write(f"\n[exit {returncode}]\n".encode())

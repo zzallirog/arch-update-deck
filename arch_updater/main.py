@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__, aur_handoff, auto, day
+from . import __version__, aur_handoff, auto, briefs, day, discover
 from .auto import init_config, run_auto, status, sudoers_rules
 from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--init", action="store_true", help="Write the starter config if there is none")
     auto_parser.add_argument("--ask", action="store_true", help="Open Update Day and ask even when nothing is waiting")
     auto_parser.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
-    auto_parser.add_argument("--due", action="store_true", help=argparse.SUPPRESS)  # the timer's ExecCondition: exit 0 only when the last visit is 3 days old
+    auto_parser.add_argument("--due", action="store_true", help=argparse.SUPPRESS)  # the timer's ExecCondition: exit 0 only when the last visit is 7 days old
     auto_parser.add_argument("--record", action="store_true", help=argparse.SUPPRESS)  # the weekly window: its answer goes to ask-result.json
     auto_parser.add_argument("--sudoers", action="store_true", help="Print the sudoers rules an unattended run needs")
     auto_parser.add_argument("--aur", action="store_true", help="With --sudoers: add the rules unattended AUR needs (a path to root for this account)")
@@ -122,6 +122,20 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_parser.add_argument("--install-auto", action="store_true", help="Enable the weekly unattended update")
     subparsers.add_parser("patrol", help="Read-only check: record queue, health and CVE findings (what the daily timer runs)")
     subparsers.add_parser("share-report", help="Print a sanitized copy of the last patrol report, safe to share")
+    dotfiles_parser = subparsers.add_parser("dotfiles", help="Bring the git repositories under \"dotfiles\" to their newest release now")
+    dotfiles_parser.add_argument("--only", help="Only this repository's path")
+    dotfiles_parser.add_argument("--suggest", action="store_true", help="List what else was installed from git and could be followed; changes nothing")
+    dotfiles_parser.add_argument("--add", metavar="PATH", help="Follow this clone from now on (writes auto.json)")
+    dotfiles_parser.add_argument("--install", help="With --add: the installer, run with no terminal after each update")
+    dotfiles_parser.add_argument("--check", help="With --add: a command that says the result works")
+    dotfiles_parser.add_argument("--drift", action="store_true", help="How far each repository is behind, and what your edits hold back, as git marks it; changes nothing")
+    brief_parser = subparsers.add_parser("brief", help="The newest failure nothing could fix: the log lines that matter, where to look, how to save the fix")
+    brief_parser.add_argument("folder", nargs="?", type=Path, help="A brief folder; default: the newest one with no fix saved")
+    learn_parser = subparsers.add_parser("learn", help="Save a fix that worked as a census case: the next run replays it by itself")
+    learn_parser.add_argument("--brief", type=Path, help="The brief the fix answers; default: the newest one with no fix saved")
+    learn_parser.add_argument("--match", required=True, help="A Python regex that finds the failure in the brief's failure.log")
+    learn_parser.add_argument("--how", required=True, help="One sentence: what was wrong and what fixed it")
+    learn_parser.add_argument("--command", dest="fix", required=True, help="One sh command that does the fix again")  # dest: "command" names the subcommand
     vault_parser = subparsers.add_parser("vault", help="Show the known failures, or name the ones in a piece of output")
     vault_parser.add_argument("--classify")
     subparsers.add_parser("cve", help="Scan installed packages against the Arch security tracker")
@@ -155,6 +169,33 @@ def main(argv: list[str] | None = None) -> int:
             if not args.dry_run and args.profile != "auto" and not args.yes and not _confirm_kernel(args.profile):
                 return 1
             _json(select_kernel(args.profile, dry_run=args.dry_run))
+            return 0
+        if command == "dotfiles":
+            config = load_json(auto.CONFIG_PATH) if auto.CONFIG_PATH.is_file() else None
+            if args.suggest:
+                found = discover.offers(config)
+                print("".join(f"{offer.path}\n  {offer.why}\n  {offer.command}\n" for offer in found) or "nothing else found\n", end="")
+                return 0
+            if args.add:
+                print(auto.follow(args.add, args.install, args.check), end="")
+                return 0
+            if args.drift:
+                print(auto.show_drift(args.only), end="")
+                return 0
+            return auto.run_dotfiles(args.only)
+        if command == "brief":
+            folder = args.folder or briefs.newest()
+            if folder is None:
+                print("no brief waiting: every failure on record has a fix saved")
+                return 0
+            print(briefs.show(folder), end="")
+            return 0
+        if command == "learn":
+            folder = args.brief or briefs.newest()
+            if folder is None:
+                raise ValueError("no brief waiting; name one with --brief")
+            case = briefs.learn(folder, args.match, args.how, args.fix)
+            print(f"saved {case.id}: the next time this failure comes back, `{case.fix}` runs by itself")
             return 0
         if command == "vault":
             _json(classify_failures(args.classify) if args.classify else load_json(VAULT_PATH))
