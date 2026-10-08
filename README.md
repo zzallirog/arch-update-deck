@@ -1,9 +1,11 @@
 # Arch Update Deck
 
+An updater that learns.
+
 `arch-update` opens one screen. It lists what is waiting, checks that the
-machine is in order, shows what still hangs from last time, and asks one
-question. Answer `y` and it updates pacman, Flatpak and Snap on that same
-screen (the AUR too, if you turn that on). Any other answer changes nothing.
+machine is in order, shows what last time left undone, and asks one question.
+`y` updates pacman, Flatpak and Snap on that same screen (the AUR too, once you
+turn it on). Any other key changes nothing.
 
 ```text
  UPDATE DAY                                                                         Thu 08.10 04:09
@@ -22,34 +24,90 @@ screen (the AUR too, if you turn that on). Any other answer changes nothing.
  l last run · k kernel
 ```
 
-The same update can also run by timer, with or without asking you first. Before
-it changes anything the tool checks the machine and saves a record of the
-package lists and `/etc`; afterwards it checks again. A failure that has
-happened before is repaired in a fixed way. Any other failure is reported with
-a command to run by hand.
+Before the first change it saves your package lists and the readable part of
+`/etc`. Then it updates. Then it checks the machine again. Most weeks that is
+the whole story.
 
-It is for someone who administers their own Arch machine. It does not read the
-Arch news, and it does not replace knowing how to repair a system that no
-longer boots.
+## When something breaks, it writes it down
+
+A failure that is still standing at the end of a run leaves a **brief**: the
+lines of the log that matter, where to look, which known cases the output
+matches, and the one command that saves a fix. `arch-update brief` prints the
+newest one. Read it yourself, or hand it to whatever assistant you use.
+
+Fix it and save the fix in one step:
+
+```bash
+arch-update learn --match '<regex>' --how '<what was wrong>' --command '<sh command>'
+```
+
+`learn` is strict. The pattern must find the failure in the brief's log. The
+command runs, the failed step runs again, and only if that passes is the case
+saved. A fix that does not hold is not a case.
+
+From then on, when that failure comes back, the command runs by itself, with
+nobody asked. What you learned is chosen before anything that shipped.
+
+Thirty-two known failures ship with the tool, each with a pattern, a meaning
+and a fix a person can run. Yours join them in `census.json`.
+
+## Then pass it on
+
+```bash
+arch-update census           # what this machine learned: [ ] only here · [x] handed upstream · * shipped
+arch-update census --share   # one GitHub issue, filled in, home folder and login taken out; you press Submit
+```
+
+The tool sends nothing by itself. Right after `learn`, and once in the weekly
+notice, each new fix is offered for sharing a single time, never again;
+`"share": false` in the configuration turns even the offer off.
+
+This is the ask. It has met one machine so far. Show it yours. Download it,
+break it, fix it, send your census, and let us build one shared base of what
+goes wrong on Arch and what settles it.
+
+## Dotfiles follow upstream, your edits win
+
+List a git repository under `dotfiles` (end-4's dots-hyprland, say) and once a
+month it is brought to upstream's newest release tag. Your uncommitted edits are
+committed and tagged first. The merge is `git merge -X ours`: where you and
+upstream touched the same lines, yours stay; everything else comes in. Every
+changed shell, fish, Python, QML, Lua, JSON or TOML file must still parse, or it
+is given back to you as it was. The repository's installer runs after every
+move.
+
+`arch-update dotfiles --drift` shows what your edits hold back, as git marks
+it. `--suggest` lists what else on the machine was cloned from git and could be
+followed. `--add PATH` follows one. A merge that fails leaves a brief like any
+other failure, and a fix you `learn` for it replays inside the next merge.
+
+## It stays out of your way
+
+The weekly run fires three minutes after you log in, then once a day, and only
+does anything when the last visit is seven days old. It waits while a game is
+running, while the machine is under CPU, memory or I/O pressure, and while you
+are on battery, for three days at most. When it does run, it takes a quarter of
+your cores at a reduced quota, so the fans stay down; an update you start by
+hand gets no such ceiling, because you are waiting for it. With `home_bssid`
+set, nothing changes unless the Wi-Fi is on one of your own access points, known
+by hardware address, not by name. With `"ask": true` the timer opens the screen
+above and waits for your `y`.
+
+It never reboots, never merges a `.pacnew`, never removes the pacman lock, and
+never stores your password. [REFERENCE](docs/REFERENCE.md#safety-statements-in-detail)
+spells each of those out.
 
 ## Requirements
 
 - Python 3.11 or later (standard library only) and `pacman`.
-- To update: `sudo` (it asks for your password once, in the terminal),
-  `pacman-contrib` (`checkupdates`, which also needs `fakeroot`; without it the
-  repository list cannot be read) and `tar` with `zstd` (for the record of
-  `/etc`; without it the update does not start).
-- For the weekly timer: `visudo`, a systemd user session and, to run while you
-  are logged out, lingering (`loginctl enable-linger`).
-- Optional: `yay` or `paru` (AUR: the first one installed lists the waiting
-  packages and, with the AUR switched on, builds them; only `yay` has sudoers
-  rules), `flatpak`, `snap`, `libnotify`, `arch-audit`, a terminal the tool
-  recognises, `resolvectl`. The reference lists what is lost without each.
-
-## Status
-
-Version 0.20.01. Written for one machine first; tested on Arch with systemd;
-expect rough edges. Issues welcome.
+- To update: `sudo`, `pacman-contrib` (`checkupdates`, which also needs
+  `fakeroot`) and `tar` with `zstd`. Without `checkupdates` the queue cannot be
+  read and the screen asks no question; without `tar` and `zstd` the record of
+  `/etc` cannot be written and the update does not start.
+- For the weekly timer: `visudo` and a systemd user session.
+- Optional: `yay` or `paru`, `flatpak`, `snap`, `libnotify`, `arch-audit`,
+  `resolvectl`, a terminal the tool recognises. The
+  [reference](docs/REFERENCE.md#requirements) says what each one adds.
 
 ## Install
 
@@ -58,133 +116,29 @@ git clone https://github.com/zzallirog/arch-update-deck && cd arch-update-deck &
 command -v arch-update
 ```
 
-The installer needs no root. It replaces the copy of the sources in
-`~/.local/share/arch-update-deck/`, puts the launcher in
-`~/.local/bin/arch-update` and a `.desktop` file in
-`~/.local/share/applications/`. Set `ARCH_UPDATER_PREFIX` to install
-elsewhere. Run it again after every update of the source tree.
-`pyproject.toml` also declares the package for `pip install .`; see the
-reference.
+No root. The sources go to `~/.local/share/arch-update-deck/`, the launcher to
+`~/.local/bin/arch-update`, a `.desktop` file to `~/.local/share/applications/`.
+`ARCH_UPDATER_PREFIX` moves all three. Run the installer again after every
+update of the source tree. If `command -v` prints nothing, add `~/.local/bin`
+to your `PATH`.
 
-If `command -v arch-update` prints nothing, `~/.local/bin` is not in `PATH`:
+Then `arch-update`, read the screen, press `y`. The first run writes a starter
+configuration and says so under `PENDING`. That is the whole first update.
+[START-HERE.md](START-HERE.md) walks through making it weekly and unattended.
 
-```bash
-# bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-# fish
-fish_add_path ~/.local/bin
-```
+## Where things live
 
-## First run
-
-1. `arch-update`
-2. Read the screen: the package table, `MACHINE`, `PENDING`.
-3. Press `y` to update. Anything else (Enter, `n`, `q`, Esc) does nothing. There
-   is no question when the repository list cannot be read, or when only AUR
-   packages wait and the AUR is off; the screen says what to do by hand.
-4. Type your sudo password when asked. It goes to `sudo`, not to this tool.
-5. Wait. The screen shows each step and ends with what changed, what failed
-   (with the command that fixes it) and `REBOOT NEEDED` if a kernel was replaced.
-   Ctrl-C is safe: the running package command ends by itself, nothing new
-   starts, and `arch-update` finishes with exit status 130.
-6. Reboot yourself if it says so. The tool never does.
-
-No sudoers rule and no configuration are needed. The first `arch-update` writes
-a starter configuration file and says so under `PENDING`.
-[START-HERE.md](START-HERE.md) has the optional weekly unattended update.
-
-## What it does and does not do
-
-- **It never reboots.** No code path runs `reboot`, `shutdown` or `poweroff`. A
-  pending reboot is shown as `REBOOT NEEDED` (exit status 10 for `auto`), and
-  `auto --status` prints `systemctl reboot` as text for you to run.
-- **It never merges a `.pacnew` file.** They are found with `pacdiff -o`
-  (`engine._pacnew_files`), which only lists them. The result screen prints
-  `compare: sudo pacdiff` next to each one. No code writes to them.
-- **It never removes the pacman lock** `/var/lib/pacman/db.lck`. The only
-  operation on it is `Path.exists()` (`watch.probe_lock`,
-  `repairs.wait_for_lock`, `engine.snapshot`). The update waits for it up to
-  three times for two minutes and then stops with exit 30.
-- **The sudoers rules are exact commands.** `auto --sudoers` prints one rule per
-  command with its arguments fixed (`auto.sudoers_rules`). Each program is
-  looked up only in `/usr/bin`, `/usr/sbin`, `/bin` and `/sbin`, never in your
-  `PATH`, and only a file owned by root that group and others cannot write gets
-  a rule (`Shell.root_binary`); otherwise the output has a `# skipped` line.
-  `--aur` adds one more exact line, for the root shim: see [AUR](#aur).
-- **It never stores your password.** At a terminal it runs `sudo -v` and you
-  type the password to `sudo`. While the update runs it refreshes sudo's ticket
-  once a minute (`sudo -n -v`, `keepalive.py`) and stops when the update ends.
-- Package and boot-file transactions (`pacman`, `yay`, `paru`, `paccache`,
-  `mkinitcpio`, `dkms`, `snap`, `flatpak`, `grub-mkconfig`) never get a time
-  limit (`shell.TRANSACTION_TOOLS`).
-- The update runs `pacman -Syu --noconfirm` without the Arch news. A conflict
-  that pacman cannot settle that way makes the store fail and is reported.
-- It takes no shutdown or sleep inhibitor. A logout, suspend or power-off during
-  an update is not guarded. Ctrl-C never kills the package manager; it waits for
-  it to end.
-- It has no command to restore the record it writes before an update.
-- Free space on `/`: below 6 GiB the repair runs `sudo paccache -rk2`, which
-  deletes cached package files except the two newest versions of each package.
-  If space is still low after three repairs, the update stops.
-- `arch-update kernel` installs a kernel package and, with GRUB, rewrites
-  `GRUB_DEFAULT`. It needs a confirmation or `--yes`. It backs up
-  `/etc/default/grub` first and restores the backup if writing or regenerating
-  `grub.cfg` fails; if the restore itself fails it says so, with the backup's
-  path. The backups are never cleaned up.
-- Some files grow without limit: `runs/` (one directory per update and per dry
-  run; opening the screen writes none), logs, grub backups, quarantined AUR
-  caches. The reference lists them.
-
-## AUR
-
-Update Day lists AUR packages and marks them `AUR · BY HAND`. With
-`"unattended_aur": false` (the default) `y` does not build them; the result
-screen says so, and you update them yourself with `yay -Sua`.
-
-With `"unattended_aur": true` and `yay`:
-
-- `yay -Sua --noconfirm --answerclean None --answerdiff None --answeredit None`
-  builds the packages. Nobody reads the `PKGBUILD` or the diff before it runs,
-  and a build script runs as your user.
-- Before building, the names of all your foreign packages (`pacman -Qqm`) are
-  sent to `https://aur.archlinux.org/rpc/v5/info`. Packages whose AUR entry
-  changed within `aur_min_age_days` (default 7) are skipped. So are VCS
-  packages (`-git` and the like), orphans, and packages whose maintainer changed
-  since you last had them up to date; those wait for you. This is a cool-down,
-  not a check of what the package does.
-- yay does not get root. Where it would run `sudo pacman -U`, it runs
-  `arch-update aur-handoff`, which puts the built files in
-  `~/.cache/arch-updater/aur-stage` and runs a root shim with no arguments. The
-  shim copies the files into a folder only root can write and installs only an
-  update of a foreign package you already have, with no install script, no
-  setuid file, no file capability, and every file where nothing running as root
-  reads it (`/opt`, `/usr/bin`, desktop files, icons, documentation, its own
-  folder under `/usr/lib` or `/usr/share`). Anything else is refused and waits
-  for you. A package that ships a system service, a dkms module or files in
-  `/etc` is never installed this way.
-- Install the shim and its sudoers rule (`arch-update auto --sudoers --aur`)
-  as in [START-HERE.md](START-HERE.md). The rule names the shim with `""`: no
-  argument, so nothing in it comes from your account.
-
-The shim cannot tell whether the package is what the `PKGBUILD` meant: the
-build ran as you. What it closes is the way from your account to root through
-an AUR install.
-
-## Other commands
-
-| Command | Action |
+| | |
 |---|---|
-| `arch-update status [--json]` | Queue, kernel, disk, failed units, `.pacnew` files. |
-| `arch-update attest` | Check kernel, initramfs, DKMS, failed units and reboot need. |
-| `arch-update kernel [profile] [--dry-run] [--yes]` | List kernel profiles, or install one and make it the GRUB default. |
-| `arch-update auto` | The same update without questions; what the timer runs. |
-| `arch-update schedule` | Show, install or remove the weekly update and the daily patrol. |
-| `arch-update vault`, `cve`, `patrol`, `share-report`, `scan-sessions` | Inspection commands; see the reference. |
+| Configuration | `~/.config/arch-updater/auto.json` |
+| State: runs, briefs, census, the pre-update record | `~/.local/state/arch-updater/` |
+| The sudoers rules, once you install them | `/etc/sudoers.d/zzz-arch-update-auto` |
+
+Version 0.20.01. Written for one machine first; expect rough edges, and send
+them in. [docs/REFERENCE.md](docs/REFERENCE.md) has every command, key, exit
+status, configuration key and file.
 
 ## Removing it
-
-There is no uninstall command for the files. Stop and delete both timers,
-remove the sudoers file if you made one, then the installed copies:
 
 ```bash
 arch-update schedule --remove
@@ -193,17 +147,7 @@ sudo rm -f /etc/sudoers.d/zzz-arch-update-auto
 rm -rf ~/.local/share/arch-update-deck ~/.local/bin/arch-update ~/.local/share/applications/arch-update.desktop
 ```
 
-The configuration (`~/.config/arch-updater/`), the state directory
-(`~/.local/state/arch-updater/`), the GRUB backups and the yay quarantine
-directories stay until you delete them.
-
-## Reference
-
-[docs/REFERENCE.md](docs/REFERENCE.md) has everything else: every command and
-flag, the keys on the screen, the exit statuses, every configuration key, every
-file the tool creates, the checks, the catalogue and the repair names, the
-schedule and ask mode, the patrol, the session scanner, the environment
-variables, `pip install`, and testing.
+The configuration and state directories stay until you delete them.
 
 ## License
 
