@@ -1296,6 +1296,42 @@ def test_a_window_that_closes_without_an_answer_fails_the_unit_and_says_so(windo
     assert any(call[0] == "notify-send" for call in window.sh.calls)
 
 
+AWAY = {"name": "home", "argv": ["am-i-home"], "exit": 40}
+
+
+def test_a_condition_that_says_no_is_read_before_the_window_and_none_opens(window, capsys) -> None:
+    """The window used to open first and the condition was read only after y: asked away from home for nothing."""
+    window.config(ask=True, conditions=[AWAY])
+    window.sh.fail["am-i-home"] = [failed("not home: connected elsewhere")]
+    assert day.scheduled(window.sh) == exits.SKIPPED
+    assert window.sh.ran == [], "no window, no update"
+    assert not (day.STATE_ROOT / "ask-result.json").exists() and not (window.root / "last-auto.json").exists()
+    assert "not now, home: not home: connected elsewhere" in capsys.readouterr().out
+
+
+def test_a_condition_that_says_no_skips_the_unasked_run_without_spending_the_week(box) -> None:
+    """A report would be a visit: the 7-day clock (auto --due) would restart and the timer would not ask tomorrow."""
+    box.config(conditions=[AWAY])
+    box.sh.fail["am-i-home"] = [failed("not home")]
+    assert day.scheduled(box.sh) == exits.SKIPPED
+    assert box.sh.ran == [] and not (box.root / "last-auto.json").exists()
+
+
+def test_a_condition_that_says_yes_still_opens_the_window(window) -> None:
+    window.config(ask=True, conditions=[AWAY])
+    assert day.scheduled(window.sh) == 70, "the window opened and nobody answered in it"
+    assert window.sh.ran[0][0] == "kitty"
+
+
+def test_a_block_no_answer_can_lift_opens_no_window_and_says_why(window) -> None:
+    """`keep` on a disk that is not there: y would stop at it, so nothing is asked and the unit fails with its status."""
+    window.config(ask=True, keep="/arch-update-test-no-such-disk/keep")
+    assert day.scheduled(window.sh) == exits.BACKUP_BLOCKED
+    assert window.sh.ran == []
+    told = [call for call in window.sh.calls if call[0] == "notify-send"]
+    assert told and "backup record" in told[-1][-1] and "arch-update auto --dry-run" in told[-1][-1]
+
+
 def test_the_failure_block_shows_the_cause_and_not_the_exit_line(box, tmp_path) -> None:
     waiting(box)
     box.sh.fail["repo"] = [Shell().logged(["sh", "-c", "echo 'error: unresolvable package conflicts detected'; exit 1"], tmp_path / "log")]

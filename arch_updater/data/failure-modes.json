@@ -9,7 +9,8 @@
       "response": "Below 6 GiB free on / the look fails with this case. The repair runs sudo paccache -rk2 (keeps the two newest cached versions of each package), then the machine is looked at again; up to three such rounds per run. If / is still below 6 GiB, the run stops before any update, with the fix below. The same limit and the same cleanup apply to the update from the screen and to the unattended run.",
       "automatic": true,
       "repair": "trim-cache",
-      "fix": "sudo paccache -rk2 && df -h /"
+      "fix": "sudo paccache -rk2 && df -h /",
+      "origin": "official"
     },
     {
       "id": "PACMAN-REPLACEMENT-CONFLICT",
@@ -18,7 +19,8 @@
       "meaning": "A package was replaced, renamed or split while its conflicting predecessor remains installed.",
       "response": "Name both packages (the fix prints the conflict lines), check with pacman -Qi <name> which one is the old one and where it came from, then run sudo pacman -Syu without --noconfirm: pacman asks whether to remove the old one, so the exact removal is visible before it happens.",
       "automatic": false,
-      "fix": "grep -h \"in conflict\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 3"
+      "fix": "grep -h \"in conflict\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 3",
+      "origin": "official"
     },
     {
       "id": "MIRROR-STALE-404",
@@ -28,7 +30,8 @@
       "response": "Let pacman try the next mirror; if all mirrors fail, refresh mirror state once and rerun the unchanged transaction.",
       "automatic": true,
       "repair": "wait-for-mirror",
-      "fix": "sudo pacman -Syyu"
+      "fix": "sudo pacman -Syyu",
+      "origin": "official"
     },
     {
       "id": "AUR-CACHE-UPSTREAM-MISSING",
@@ -37,7 +40,8 @@
       "meaning": "The AUR build cache is a broken git checkout, not a package failure.",
       "response": "Quarantine only that package cache and fetch a clean copy once. The fix opens the last run's log, where yay names the package; delete that folder under ~/.cache/yay, then run yay -Sua.",
       "automatic": false,
-      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\""
+      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\"",
+      "origin": "official"
     },
     {
       "id": "AUR-CACHE-PKGBUILD-MISSING",
@@ -47,7 +51,8 @@
       "response": "Verify the named path is a direct non-symlink yay cache child, quarantine it reversibly, then fetch it cleanly once.",
       "automatic": true,
       "repair": "quarantine-aur-cache",
-      "fix": "grep -h \"error downloading sources\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 1"
+      "fix": "grep -h \"error downloading sources\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 1",
+      "origin": "official"
     },
     {
       "id": "AUR-SOURCE-REMOTE-PREDICATE",
@@ -56,7 +61,8 @@
       "meaning": "makepkg accepts source repositories by configured origin URL as well as object integrity.",
       "response": "Restore the PKGBUILD-declared origin URL after an alternate transport fetch; then verify objects.",
       "automatic": false,
-      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\""
+      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\"",
+      "origin": "official"
     },
     {
       "id": "AUR-GIT-LFS-PROTOCOL",
@@ -65,7 +71,8 @@
       "meaning": "The PKGBUILD source protocol helper is missing before source preparation.",
       "response": "Install the declared git-lfs make dependency and retry source preparation once.",
       "automatic": false,
-      "fix": "sudo pacman -S --needed git-lfs"
+      "fix": "sudo pacman -S --needed git-lfs",
+      "origin": "official"
     },
     {
       "id": "SUDO-TIMESTAMP-EXPIRED",
@@ -74,7 +81,8 @@
       "meaning": "A long AUR build outlived terminal-scoped sudo authentication.",
       "response": "Use pkexec as yay's sudo command or keep authentication alive explicitly; never place a password in argv or logs.",
       "automatic": false,
-      "fix": "sh -c 'f=$(mktemp) && arch-update auto --sudoers > \"$f\" && visudo -cf \"$f\" && sudo install -m 0440 \"$f\" /etc/sudoers.d/zzz-arch-update-auto; rm -f \"$f\"'"
+      "fix": "sh -c 'f=$(mktemp) && arch-update auto --sudoers > \"$f\" && visudo -cf \"$f\" && sudo install -m 0440 \"$f\" /etc/sudoers.d/zzz-arch-update-auto; rm -f \"$f\"'",
+      "origin": "official"
     },
     {
       "id": "AUR-SPLIT-PACKAGE-GRANULARITY",
@@ -83,7 +91,8 @@
       "meaning": "Installing split outputs one by one can repeatedly prepare the same large source tree.",
       "response": "Build the pkgbase once and install only the names already present on the machine in one pacman -U transaction.",
       "automatic": false,
-      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\""
+      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\"",
+      "origin": "official"
     },
     {
       "id": "AUR-BUILD-LAYER-FAILURE",
@@ -92,7 +101,8 @@
       "meaning": "The PKGBUILD was fetched correctly but its build layer failed; retrying the package manager unchanged cannot repair source or compiler state.",
       "response": "Capture the first compiler error, keep the failed pkgbase isolated, and continue only independent packages.",
       "automatic": false,
-      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\""
+      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\"",
+      "origin": "official"
     },
     {
       "id": "DKMS-PARTIAL-MODULE-FAILURE",
@@ -102,7 +112,8 @@
       "response": "List DKMS status per installed kernel and distinguish required GPU/storage modules from optional peripherals before reboot.",
       "automatic": true,
       "repair": "rebuild-dkms",
-      "fix": "sudo dkms autoinstall && dkms status"
+      "fix": "sudo dkms autoinstall && dkms status",
+      "origin": "official"
     },
     {
       "id": "HYPRLAND-ABI-FORK",
@@ -111,7 +122,8 @@
       "meaning": "A mixed repo/AUR Hyprland chain crossed a shared-library SONAME boundary.",
       "response": "Treat Hyprland, hyprutils, hyprlang, hyprgraphics, aquamarine and the portal as one ABI unit before reboot.",
       "automatic": false,
-      "fix": "arch-update attest"
+      "fix": "arch-update attest",
+      "origin": "official"
     },
     {
       "id": "RUNNING-KERNEL-MODULES-MISSING",
@@ -120,7 +132,8 @@
       "meaning": "The old running kernel was replaced on disk; new module loads wait for reboot.",
       "response": "Do not rebuild the deleted old tree. Verify the new kernel, DKMS and initramfs, then mark reboot required.",
       "automatic": false,
-      "fix": "systemctl reboot"
+      "fix": "systemctl reboot",
+      "origin": "official"
     },
     {
       "id": "PACNEW-PENDING",
@@ -130,7 +143,8 @@
       "meaning": "Package defaults changed but local configuration remains authoritative.",
       "response": "Inventory and diff each file; never merge all pacnew files blindly.",
       "automatic": false,
-      "fix": "sudo pacdiff"
+      "fix": "sudo pacdiff",
+      "origin": "official"
     },
     {
       "id": "NEW-FAILED-UNIT",
@@ -139,7 +153,8 @@
       "meaning": "The update introduced a unit failure relative to the preflight baseline.",
       "response": "Report only the set difference from the baseline and inspect that unit's current journal.",
       "automatic": false,
-      "fix": "systemctl --failed; systemctl --user --failed"
+      "fix": "systemctl --failed; systemctl --user --failed",
+      "origin": "official"
     },
     {
       "id": "KERNEL-BOOT-ARTIFACT-MISSING",
@@ -149,7 +164,8 @@
       "response": "Regenerate the affected preset and stop before reboot if either artifact remains absent or empty.",
       "automatic": true,
       "repair": "rebuild-initramfs",
-      "fix": "sudo mkinitcpio -P"
+      "fix": "sudo mkinitcpio -P",
+      "origin": "official"
     },
     {
       "id": "STALE-BOOTLOADER-CONFIG",
@@ -158,7 +174,8 @@
       "meaning": "Kernel files exist but the boot menu cannot select the desired profile.",
       "response": "Regenerate the detected bootloader configuration and verify the selected vmlinuz path appears.",
       "automatic": false,
-      "fix": "sudo grub-mkconfig -o /boot/grub/grub.cfg"
+      "fix": "sudo grub-mkconfig -o /boot/grub/grub.cfg",
+      "origin": "official"
     },
     {
       "id": "PACMAN-LOCK",
@@ -168,7 +185,8 @@
       "response": "Wait for it; never remove the lock while its owner may be alive.",
       "automatic": true,
       "repair": "wait-for-lock",
-      "fix": "sudo fuser -v /var/lib/pacman/db.lck"
+      "fix": "sudo fuser -v /var/lib/pacman/db.lck",
+      "origin": "official"
     },
     {
       "id": "DNS-FAILED",
@@ -178,7 +196,8 @@
       "response": "Flush the resolver cache and wait; never rewrite resolver configuration.",
       "automatic": true,
       "repair": "wait-for-dns",
-      "fix": "resolvectl status"
+      "fix": "resolvectl status",
+      "origin": "official"
     },
     {
       "id": "ABI-MISMATCH",
@@ -188,7 +207,8 @@
       "response": "Rebuild that package against the libraries installed now. The check above names it; the fix lists the locally built packages, then yay -S --rebuild <name>.",
       "automatic": true,
       "repair": "rebuild-against-new-libraries",
-      "fix": "pacman -Qm"
+      "fix": "pacman -Qm",
+      "origin": "official"
     },
     {
       "id": "AUR-UNREACHABLE",
@@ -199,7 +219,8 @@
       "response": "Wait and ask again; build nothing until it answers.",
       "automatic": true,
       "repair": "wait-for-mirror",
-      "fix": "curl -sI https://aur.archlinux.org/rpc/v5/info"
+      "fix": "curl -sI https://aur.archlinux.org/rpc/v5/info",
+      "origin": "official"
     },
     {
       "id": "PACMAN-DATABASE",
@@ -209,7 +230,8 @@
       "meaning": "pacman -Dk found the local package database inconsistent.",
       "response": "Stop before any transaction and read the report by hand.",
       "automatic": false,
-      "fix": "pacman -Dk"
+      "fix": "pacman -Dk",
+      "origin": "official"
     },
     {
       "id": "KEEP-UNWRITABLE",
@@ -219,7 +241,8 @@
       "meaning": "The pre-update record has nowhere to land.",
       "response": "Mount or fix the keep directory; no update runs without its record.",
       "automatic": false,
-      "fix": "arch-update auto --dry-run"
+      "fix": "arch-update auto --dry-run",
+      "origin": "official"
     },
     {
       "id": "CONDITION",
@@ -229,7 +252,8 @@
       "meaning": "One of the owner's own conditions said no.",
       "response": "Whatever that condition's command prints is the reason.",
       "automatic": false,
-      "fix": "arch-update auto --dry-run"
+      "fix": "arch-update auto --dry-run",
+      "origin": "official"
     },
     {
       "id": "NOT-CONFIGURED",
@@ -239,7 +263,8 @@
       "meaning": "This machine has no auto config, so nothing is assumed safe.",
       "response": "Write the config once.",
       "automatic": false,
-      "fix": "arch-update auto --init"
+      "fix": "arch-update auto --init",
+      "origin": "official"
     },
     {
       "id": "NO-ROOT",
@@ -249,7 +274,8 @@
       "meaning": "sudo -n does not work, or the run was started as root.",
       "response": "Install the exact sudoers rules; run as the desktop user.",
       "automatic": false,
-      "fix": "sh -c 'f=$(mktemp) && arch-update auto --sudoers > \"$f\" && visudo -cf \"$f\" && sudo install -m 0440 \"$f\" /etc/sudoers.d/zzz-arch-update-auto; rm -f \"$f\"'"
+      "fix": "sh -c 'f=$(mktemp) && arch-update auto --sudoers > \"$f\" && visudo -cf \"$f\" && sudo install -m 0440 \"$f\" /etc/sudoers.d/zzz-arch-update-auto; rm -f \"$f\"'",
+      "origin": "official"
     },
     {
       "id": "INTERRUPTED",
@@ -259,7 +285,8 @@
       "meaning": "The run was asked to stop between two stores.",
       "response": "The run was stopped (Ctrl-C or a signal) and nothing new was started. Open arch-update and answer yes again.",
       "automatic": false,
-      "fix": "arch-update"
+      "fix": "arch-update",
+      "origin": "official"
     },
     {
       "id": "DOTFILES-UNSAVED",
@@ -269,7 +296,8 @@
       "meaning": "Your uncommitted changes in the repository could not be committed (a hook, signing, a lock), so nothing was merged.",
       "response": "The repository is as it was, your changes uncommitted. The brief has git's own words; once a commit works there, the next run goes on.",
       "automatic": false,
-      "fix": "arch-update brief"
+      "fix": "arch-update brief",
+      "origin": "official"
     },
     {
       "id": "DOTFILES-NOT-A-REPO",
@@ -279,7 +307,8 @@
       "meaning": "A path under \"dotfiles\" in auto.json is not a git repository.",
       "response": "Correct the path in auto.json, or clone the repository there.",
       "automatic": false,
-      "fix": "${EDITOR:-nano} ~/.config/arch-updater/auto.json"
+      "fix": "${EDITOR:-nano} ~/.config/arch-updater/auto.json",
+      "origin": "official"
     },
     {
       "id": "DOTFILES-FETCH",
@@ -290,7 +319,8 @@
       "response": "Nothing in the repository was changed. The next run fetches again.",
       "automatic": true,
       "repair": "wait-for-dns",
-      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\""
+      "fix": "less +G \"$(ls -td ~/.local/state/arch-updater/runs/*/ | head -n 1)run.log\"",
+      "origin": "official"
     },
     {
       "id": "DOTFILES-CONFLICT",
@@ -300,7 +330,8 @@
       "meaning": "The merge of the new release could not be finished: neither the person's side winning nor a case learned before settled it.",
       "response": "The merge was undone and the repository is as it was before the run (tag arch-update/before-<run>). The brief names the files and says how to save the fix that works, so the next run replays it.",
       "automatic": false,
-      "fix": "arch-update brief"
+      "fix": "arch-update brief",
+      "origin": "official"
     },
     {
       "id": "DOTFILES-INSTALL",
@@ -310,7 +341,8 @@
       "meaning": "The repository's installer failed after the update, and no case learned before fixed it.",
       "response": "The repository stays on the new release. The brief holds the installer's telling lines and says how to save the fix that works, so the next run replays it.",
       "automatic": false,
-      "fix": "arch-update brief"
+      "fix": "arch-update brief",
+      "origin": "official"
     }
   ]
 }

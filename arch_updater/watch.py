@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import exits, repairs
+from . import exits, home, repairs
 from .engine import SOFT_FREE_BYTES, attest, snapshot
 from .shell import Shell
 
@@ -62,12 +62,22 @@ def probe_privilege(scene: Scene) -> Reading:
 def probe_conditions(scene: Scene) -> Reading:
     """The owner's own guards: each configured command must exit 0 before anything changes.
 
-    Home network, backup freshness and whatever else live here as commands, so
-    this code never has to learn what "home" or "fresh" means on a machine.
+    Backup freshness and whatever else live here as commands, so this code
+    never has to learn what "fresh" means on a machine. Home is the one guard
+    built in (`home_bssid`, home.py), because reading an access point right is
+    harder than it looks; it answers as a condition named "home".
     """
     if scene.config is None:
         return Reading([Verdict("conditions", "blocked", "NOT-CONFIGURED", f"no config at {scene.config_path}", exits.TOOL_FAILURE)])
     verdicts = []
+    place = home.locate(scene.config, scene.sh)  # the one guard built in: the access point, read, never set
+    if place is not None and place.where == "home":
+        verdicts.append(Verdict("home", "pass", detail=place.detail))
+    elif place is not None and place.where == "unknown" and home.overdue():
+        verdicts.append(Verdict("home", "pass", detail=f"{place.detail}; nothing told home from away for {home.MAX_UNKNOWN_DAYS} days, so the run goes"))
+    elif place is not None:
+        detail = place.detail + ("; counted as not home" if place.where == "unknown" else "")
+        verdicts.append(Verdict("home", "blocked", "CONDITION", detail, exits.NETWORK_BLOCKED))
     for condition in scene.config.get("conditions") or []:
         result = scene.sh.capture(condition["argv"], timeout=60)
         if result.returncode == 0:
@@ -164,6 +174,19 @@ PROBES: tuple[Callable[[Scene], Reading], ...] = (
     probe_machine,
     probe_smoke,
 )
+
+
+# What stops a run before it changes anything, with nobody needed to say so: the timer reads these before it opens a window.
+GATES: tuple[Callable[[Scene], Reading], ...] = (probe_conditions, probe_keep)
+
+
+def held(scene: Scene, probes: tuple[Callable[[Scene], Reading], ...] = GATES) -> Verdict | None:
+    """The first verdict of `probes` that is not a pass, or None. The same probes the look asks, one after another."""
+    for probe in probes:
+        for verdict in _ask(probe, scene).verdicts:
+            if verdict.status != "pass":
+                return verdict
+    return None
 
 
 def _ask(probe: Callable[[Scene], Reading], scene: Scene) -> Reading:

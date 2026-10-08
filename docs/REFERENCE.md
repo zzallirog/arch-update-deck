@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.0. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.01. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -222,6 +222,7 @@ is caught only by Update Day.
 | `dotfiles [--only PATH] [--suggest] [--add PATH [--install CMD] [--check CMD]]` | Without a flag: brings the repositories under `dotfiles` to their newest release now, whatever their 30 days; exit 1 if one is left broken (with a brief). `--suggest` and `--add`: see [Dotfiles](#dotfiles). |
 | `brief [FOLDER]` | Prints the newest brief with no fix saved, or the one in `FOLDER`. See [Failures that teach](#failures-that-teach). |
 | `learn [--brief FOLDER] --match RE --how TEXT --command CMD` | Runs the fix, checks that it settles the failure, and saves it as a census case; refused (exit 1, nothing saved) otherwise. See [Failures that teach](#failures-that-teach). |
+| `census [--share [--json]]` | Lists the cases this machine recorded or learned: `[ ]` only here, `[x]` already handed upstream, and the count of `*` official ones (shipped with the tool, `"origin": "official"` in the catalogue). `--share` opens one GitHub issue with every case not yet handed upstream filled in (home folder written `~`, login `<user>`, each `"origin": "local"`) and marks them `[x]`; you press Submit, or close the tab. Nothing is chosen case by case, and nothing is sent by the tool itself. Without a desktop it prints the link; `--json` prints every local case as JSON. Sharing is optional and apart from the update: right after `learn`, and in the weekly notice (a click), each new learned fix is offered once, never again; `"share": false` in auto.json turns the offer off. |
 | `vault [--classify TEXT]` | Prints the shipped catalogue of known failures as JSON, or only the entries whose pattern matches `TEXT`. |
 | `cve` | Prints the `arch-audit` findings as JSON (`available`, `findings`, `count`, `error`). Exit 0 even when `arch-audit` is missing. |
 | `scan-sessions [--output-dir DIR] [--json]` | See [Session scanner](#session-scanner). |
@@ -238,6 +239,26 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.01
+
+- The timer's run reads `conditions` before anything else. A condition that
+  says no skips the run (80, not a failure): with `"ask": true` no window
+  opens, and no report is written, so the timer tries again the next day
+  instead of 7 days later. Before, the window opened first and the condition
+  was read only after `y`.
+- With `"ask": true`, a `keep` that cannot be written (the other disk is not
+  mounted) or a `conditions` entry that cannot be run ends the timer's run
+  before the window opens, with that status and a notification.
+- New: `home_bssid` in auto.json. The run goes only while the Wi-Fi is
+  connected to one of these access points, known by BSSID, not by network
+  name. See [Home](#home).
+- New: `arch-update census`. What this machine learned is listed (`[ ]` only
+  here, `[x]` handed upstream, `*` official), and `--share` opens one GitHub
+  issue with all of it filled in, home folder and login taken out; you press
+  Submit. Each new learned fix is offered once, after `learn` and in the
+  weekly notice; `"share": false` turns that off. The shipped catalogue marks
+  its cases `"origin": "official"`.
 
 ### Changed in 0.20.0
 
@@ -598,6 +619,34 @@ other exit status leaves the unit failed and visible in
 /usr/local/sbin:/usr/local/bin:/usr/bin`. Without `"ask"` the unit's status is
 the status of `arch-update auto`.
 
+`arch-update auto --scheduled` first runs `home_bssid` and `conditions` (the
+same checks the update makes before it changes anything). If one says no, it
+prints the reason and exits 80; nothing is asked, nothing runs, and no report
+is written, so the next daily try is still due. Then comes the [quiet
+gate](#quiet), then the window or the update.
+
+The day and hour are the timer's, not the program's: a check of the weekday in
+the program would only skip runs the timer had already started, and every
+skipped one would wait for the next day. For a fixed day, override both units:
+
+```ini
+# ~/.config/systemd/user/arch-update-auto.timer.d/day.conf
+[Timer]
+OnStartupSec=
+OnUnitInactiveSec=
+OnCalendar=Sun 12:00
+Persistent=true
+
+# ~/.config/systemd/user/arch-update-auto.service.d/day.conf
+[Service]
+ExecCondition=
+```
+
+The empty `ExecCondition=` removes `auto --due`: the last visit ends a few
+minutes after 12:00, so a week later it is not yet 7 days old and every other
+Sunday would be skipped. Run `systemctl --user daemon-reload` afterwards.
+`schedule --install-auto` does not touch the `.d` folders.
+
 With `"ask": true` the timer opens a terminal on `arch-update auto --ask
 --record`: the [Update Day](#update-day) screen, with the question asked even if
 nothing waits. `--record` makes the visit write its answer to `ask-result.json`
@@ -611,6 +660,8 @@ Exit status of the scheduled run (`day.scheduled`, `day.ask`). The unit's
 
 | What happened | Status | `outcome` in `ask-result.json` |
 |---|---|---|
+| `home_bssid` or a `conditions` entry said no; no window was opened | 80 (SKIPPED) | none |
+| `keep` cannot be written, or a `conditions` entry cannot be run, so no window was opened | That check's status (50 for `keep`, 20 otherwise), plus a notification and a line in `ask-window.log`. | none |
 | The update ran (after `y`, or because no terminal was found and it ran unasked) | Its own status, as in [Exit status](#exit-status). | `updated` (none when it ran unasked) |
 | A terminal was found, but neither `DISPLAY` nor `WAYLAND_DISPLAY` is set | 20 (BLOCKED), plus a notification and a line in `ask-window.log`. | none |
 | The answer was "not now" | 80 (SKIPPED) | `declined` |
@@ -734,8 +785,8 @@ file `arch-update auto` exits 70.
 
 ```json
 {
+  "home_bssid": ["aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"],
   "conditions": [
-    {"name": "home", "argv": ["am-i-at-home"], "exit": 40},
     {"name": "backup", "argv": ["my-backup-is-fresh"], "exit": 50}
   ],
   "keep": "/mnt/other-disk/arch-update",
@@ -749,7 +800,8 @@ file `arch-update auto` exits 70.
 
 | Key | Meaning |
 |---|---|
-| `conditions` | Commands that must exit 0 before anything is changed. Each has a 60 s limit. `name` labels it, `argv` is the command, `exit` is the status reported when it fails: 20, 40 or 50. Any other value, or none, means 20. Default: none. |
+| `home_bssid` | Access points (BSSID, `aa:bb:cc:dd:ee:ff`, any case; a list, or one string) the Wi-Fi must be connected to before anything is changed. A 2.4 GHz and a 5 GHz network of one router have different BSSIDs: list both. Otherwise the check reports `home` with exit 40, and the timer's run is skipped (80). See [Home](#home). Default: no check. |
+| `conditions` | Commands that must exit 0 before anything is changed. Each has a 60 s limit. `name` labels it, `argv` is the command, `exit` is the status reported when it fails: 20, 40 or 50. Any other value, or none, means 20. The timer's run checks them before it asks or updates, and a "no" skips it (80). Default: none. |
 | `keep` | Directory for the record written before the first update of a run: `packages.txt`, `explicit.txt`, `foreign.txt` and `etc.tar.zst` (the part of `/etc` your user can read; files only root can read are left out, so no password hashes). The last four records are kept. The directory is created (mode 0700, with missing parents) when the record is written. The nearest folder that already exists must be writable and, unless `keep_on_system_disk` is `true`, on a different device than `/`. Default: `keep/` in the state directory. |
 | `keep_on_system_disk` | `true` allows `keep` on the same device as `/`. Default `false`. |
 | `smoke` | List of `{"argv": [...], "rebuild": "<package>"}`. Each command runs with a 20 s limit; a program that is not installed is skipped, one that exits non-zero is rebuilt from the AUR. The rebuild needs `unattended_aur` and `yay`; without them the failure is reported. |
@@ -760,6 +812,7 @@ file `arch-update auto` exits 70.
 | `quiet` | `false` turns off the quiet gate and the ceiling of the timer's run. Default on. See [Quiet](#quiet). |
 | `quiet_pressure` | Limits for the gate, as `{"cpu": 40, "memory": 10, "io": 30}`: the "some avg60" of `/proc/pressure/<kind>` above which the run waits. |
 | `quiet_share` | The timer's run gets one thread of every `quiet_share`-th physical core it may use (default 4: a quarter), at 60 % of a CPU each. |
+| `share` | `false`: never offer to share what this machine learned (`arch-update census --share` still works by hand). Default: each new learned fix is offered once. |
 | `dotfiles_every_days` | Days between visits of each dotfiles repository. Default 30. A failed one is tried at the next run. |
 | `dotfiles` | Git repositories to keep at their newest release, after the package stores. Each is a path, or `{"path": "~/dots-hyprland", "install": "./setup install", "check": "...", "track": "release"}`. See [Dotfiles](#dotfiles). Default: none. |
 
@@ -853,6 +906,32 @@ the cores are counted from `/sys/devices/system/cpu/online`, not from what the
 process is allowed at that moment. `"quiet": false` lifts a ceiling left
 behind and sets none. An update started by hand has none of this: someone is
 waiting for it.
+
+The quiet gate comes after `home_bssid` and `conditions`: a run they skip does
+not start the 3 days.
+
+## Home
+
+With `home_bssid` set, every update (the timer's and one started by hand)
+first reads which access point the Wi-Fi is connected to: `nmcli -t -f
+IN-USE,BSSID device wifi list --rescan no`, or, if NetworkManager does not
+answer, `iw dev` and `iw dev <interface> link`. Both only read; nothing scans
+or connects. A network's name is not used: anyone can give a network yours.
+
+| Reading | Result |
+|---|---|
+| Connected to a listed BSSID | pass |
+| Connected to another one | `home` blocked, exit 40; the timer's run is skipped (80) |
+| Cannot tell: not on Wi-Fi (a cable, a phone over USB), neither tool answers, or `home_bssid` holds no valid address | counted as not home, as above, for 14 days |
+
+"Cannot tell" is not "away" for ever: a machine that can never read its access
+point would never update. The timer's run keeps the date of the first reading
+that could not tell in `home-unknown.json` in the state directory, and any
+reading that could (home or elsewhere) deletes it. Once it is 14 days old,
+"cannot tell" passes, with the reason in the report, until a reading succeeds
+again. A known foreign access point never passes. To find your BSSIDs, at home:
+`nmcli -t -f IN-USE,BSSID device wifi list --rescan no`; the line starting
+with `*` is the one in use.
 
 ## Failures that teach
 
@@ -955,6 +1034,7 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `auto.lock` | Lock file for the update. It is created by every run, dry runs included; the lock is the `flock` on it, not the file's existence. |
 | `ask-window.log` | Output of the ask-mode terminal, and the reasons it could not run. |
 | `ask-result.json` | The answer given at the last question of the weekly window (`--record`). Nothing else writes it. |
+| `home-unknown.json` | Since when the timer's run could not tell whether it is at home (`since`, `reason`). Only the timer's run writes or deletes it. See [Home](#home). |
 | `reports/` | Output of `scan-sessions` by default. |
 | `~/.config/systemd/user/arch-update-auto.{service,timer}`, `arch-update-patrol.{service,timer}` | The user units. |
 | `/etc/sudoers.d/zzz-arch-update-auto` | The sudoers rules, once you install them. |

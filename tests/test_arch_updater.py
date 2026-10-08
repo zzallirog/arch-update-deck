@@ -196,7 +196,7 @@ def test_help_lists_the_commands_in_order_one_plain_line_each_and_none_of_the_ol
     text = capsys.readouterr().out
     assert "==SUPPRESS==" not in text
     listed = re.findall(r"^    (\S+)\s{2,}\S", text, re.MULTILINE)
-    assert listed == ["status", "kernel", "attest", "auto", "schedule", "patrol", "share-report", "dotfiles", "brief", "learn", "vault", "cve", "scan-sessions"]
+    assert listed == ["status", "kernel", "attest", "auto", "schedule", "patrol", "share-report", "dotfiles", "brief", "learn", "census", "vault", "cve", "scan-sessions"]
     for gone in ("menu", "preview", "snapshot-json", "search", "plan", "run"):
         with pytest.raises(SystemExit):
             main([gone])
@@ -275,7 +275,9 @@ def test_a_built_wheel_carries_the_data_files_and_one_version(tmp_path) -> None:
     (wheel,) = tmp_path.glob("arch_update_deck-*.whl")
     from arch_updater import __version__
 
-    assert wheel.name.startswith(f"arch_update_deck-{__version__}-")
+    # One version, as pip writes it (PEP 440 drops leading zeros: 0.20.01 is 0.20.1 to it).
+    normalized = ".".join(str(int(part)) for part in __version__.split("."))
+    assert wheel.name.startswith(f"arch_update_deck-{normalized}-")
     names = zipfile.ZipFile(wheel).namelist()
     assert {"arch_updater/data/failure-modes.json", "arch_updater/data/profiles.json", "arch_updater/control.tis"} <= set(names)
 

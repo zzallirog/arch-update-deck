@@ -48,7 +48,7 @@ longer boots.
 
 ## Status
 
-Version 0.20.0. Written for one machine first; tested on Arch with systemd;
+Version 0.20.01. Written for one machine first; tested on Arch with systemd;
 expect rough edges. Issues welcome.
 
 ## Install

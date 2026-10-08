@@ -4,7 +4,9 @@ import argparse
 import json
 import os
 import pwd
+import shutil
 import signal
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,7 +16,8 @@ from .auto import init_config, run_auto, status, sudoers_rules
 from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
 from .scheduler import AUTO_UNIT, is_due, PATROL_UNIT, auto_status, remove_timer, install_daily_patrol_timer, install_weekly_auto_timer, last_patrol_report, run_patrol, scheduler_status
-from .share_report import sanitize_patrol_report
+from .census import load as census_cases
+from .share_report import issue_url, mark, mark_sent, sanitize_patrol_report, share_census, should_offer, unsent
 from .textsafe import clean
 from .transcripts import write_session_report
 
@@ -90,6 +93,36 @@ def _open_day() -> int:
     return day.ask(notice=notice)
 
 
+def _open_issue(url: str) -> None:
+    """The browser on the filled-in issue; without one, the link. The person presses Submit, or does not."""
+    opener = shutil.which("xdg-open") if (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")) else None
+    if opener and subprocess.run([opener, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode == 0:
+        print("opened a GitHub issue with your census filled in; look it over and press Submit")
+        return
+    print(f"open this to send your census (it is filled in; you press Submit):\n{url}")
+
+
+def _share_pending() -> bool:
+    """Hand every local case not yet sent to a filled-in GitHub issue, and mark them [x]. False when there is none."""
+    pending = unsent(census_cases(STATE_ROOT), STATE_ROOT)
+    if not pending:
+        return False
+    _open_issue(issue_url(share_census(pending, str(Path.home()), pwd.getpwuid(os.getuid()).pw_name)))
+    mark_sent(pending, STATE_ROOT)
+    return True
+
+
+def _offer_share() -> None:
+    """Right after a fix was learned, once per fix: one key to hand upstream all that is not there yet. Never sent unasked."""
+    fresh = should_offer(census_cases(STATE_ROOT), STATE_ROOT, load_json(auto.CONFIG_PATH) if auto.CONFIG_PATH.is_file() else None)
+    if not fresh or not sys.stdin.isatty():
+        return
+    print(f"\nYour updater just learned to fix {len(fresh)} thing{'s' if len(fresh) > 1 else ''} on its own.")
+    print("Pass it on, so other people's updates fix themselves too? [Enter] yes (opens a page; you press Submit)  [n] not now ", end="", flush=True)
+    if sys.stdin.readline().strip().lower() in ("", "y", "yes", "s"):
+        _share_pending()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="arch-update",
@@ -136,6 +169,9 @@ def build_parser() -> argparse.ArgumentParser:
     learn_parser.add_argument("--match", required=True, help="A Python regex that finds the failure in the brief's failure.log")
     learn_parser.add_argument("--how", required=True, help="One sentence: what was wrong and what fixed it")
     learn_parser.add_argument("--command", dest="fix", required=True, help="One sh command that does the fix again")  # dest: "command" names the subcommand
+    census_parser = subparsers.add_parser("census", help="What this machine learned; --share hands it upstream so everyone's updates fix themselves")
+    census_parser.add_argument("--share", action="store_true", help="Open a GitHub issue with it filled in (home folder and login taken out); you press Submit")
+    census_parser.add_argument("--json", action="store_true", help="With --share: print the JSON instead of opening a page")
     vault_parser = subparsers.add_parser("vault", help="Show the known failures, or name the ones in a piece of output")
     vault_parser.add_argument("--classify")
     subparsers.add_parser("cve", help="Scan installed packages against the Arch security tracker")
@@ -196,6 +232,21 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("no brief waiting; name one with --brief")
             case = briefs.learn(folder, args.match, args.how, args.fix)
             print(f"saved {case.id}: the next time this failure comes back, `{case.fix}` runs by itself")
+            _offer_share()
+            return 0
+        if command == "census":
+            cases = census_cases(STATE_ROOT)
+            if args.share and args.json:  # everything local, sent or not: a file to attach
+                _json(share_census(cases, str(Path.home()), pwd.getpwuid(os.getuid()).pw_name))
+            elif args.share:
+                if not _share_pending():
+                    print("everything this machine learned is upstream already: nothing left to share")
+            else:
+                sent = {case.id for case in cases} - {case.id for case in unsent(cases, STATE_ROOT)}
+                local = [case for case in cases if case.id.startswith("LOCAL-")]
+                lines = [f"{mark(case, STATE_ROOT, sent)} {case.id}  seen {case.seen}  {case.meaning}\n      fix: {case.fix}\n" for case in local]
+                print("".join(lines) or "nothing learned on this machine yet\n", end="")
+                print(f"*   {len(cases) - len(local)} official cases ship with the tool (arch-update vault) · [x] shared upstream · [ ] only here")
             return 0
         if command == "vault":
             _json(classify_failures(args.classify) if args.classify else load_json(VAULT_PATH))

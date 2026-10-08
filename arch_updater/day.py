@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, TextIO
 
-from . import auto, exits, quiet
+from . import auto, exits, home, quiet
 from .engine import STATE_ROOT, available_kernel_profiles, load_json, read_aur_queue, select_kernel
 from .keepalive import NOTICE as TICKET_EXPIRED, Keepalive
 from .scheduler import AUTO_UNIT
@@ -773,7 +773,11 @@ def scheduled(sh: Shell | None = None) -> int:
     """What the weekly timer runs: the question in a window if the owner wants to be asked, else the update.
 
     Exit status, by what happened:
+      `home_bssid` or a condition in
+      `conditions` said no, read first       SKIPPED (80): no window, no report, the timer tries again tomorrow
       the update ran                         its own status (IDLE 0, READY_FOR_REBOOT 10, BLOCKED 20, ...)
+      a window was wanted, but `keep` (or
+      another gate in watch.GATES) blocks    that verdict's status (BACKUP_BLOCKED 50, ...), notification, no window
       no terminal installed                  the update runs unasked, so its own status
       terminal found, no screen to open it   BLOCKED (20), notification, line in ask-window.log
       answered "not now" or no answer in
@@ -783,6 +787,12 @@ def scheduled(sh: Shell | None = None) -> int:
     """
     sh = sh or Shell()
     config = load_json(auto.CONFIG_PATH) if auto.CONFIG_PATH.is_file() else None
+    home.track(home.locate(config, sh))  # only the timer keeps the clock of not knowing where the machine is
+    # Read before anything is asked: a window whose yes would stop at an owner's condition is a question for nothing.
+    stop = auto.hold(sh, config)
+    if stop is not None and stop.case == "CONDITION":  # the owner's own "not now": the timer tries again tomorrow
+        print(f"arch-update: not now, {human(stop.probe)}: {stop.detail}")
+        return exits.SKIPPED
     reason = quiet.gate(config)
     waiting = quiet.waited(reason, STATE_ROOT)
     if waiting:  # not a visit: the timer asks again tomorrow, for a few days at most
@@ -798,6 +808,9 @@ def scheduled(sh: Shell | None = None) -> int:
             return auto.run_auto(sh=sh)["exit_code"]
         finally:
             quiet.release()  # systemd would keep it until the next boot
+    if stop is not None:  # the run would stop there before changing anything, whatever the answer
+        _say(sh, f"{human(stop.probe)}: {' '.join(stop.detail.split())}; the weekly update was not run. By hand: arch-update auto --dry-run")
+        return stop.code
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         _say(sh, f"{terminal[0]} cannot open: no DISPLAY or WAYLAND_DISPLAY in this session; the weekly update was not run. By hand: arch-update auto")
         return exits.BLOCKED

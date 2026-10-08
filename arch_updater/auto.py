@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import aur_handoff, briefs, census, discover, dotfiles, exits, repairs, stores, tis, watch
+from . import aur_handoff, briefs, census, discover, dotfiles, exits, repairs, share_report, stores, tis, watch
 from .cve import scan_cves
 from .engine import STATE_ROOT, CommandResult, _write_json, load_json
 from .exits import Stopped
@@ -136,12 +136,14 @@ class World:
             raise KeyError(f"nothing is wired to take a write on {port}")
         self.failure = value
 
+    def scene(self) -> watch.Scene:
+        return watch.Scene(self.sh, self.config, CONFIG_PATH, self.keep_root(), self.baseline)
+
     def look(self) -> list[Verdict]:
         """Ask every probe and take in what they learned. Returns the verdicts; decides nothing."""
         self.looks += 1
         self.dirty = False
-        scene = watch.Scene(self.sh, self.config, CONFIG_PATH, self.keep_root(), self.baseline)
-        reading = watch.look(scene)
+        reading = watch.look(self.scene())
         self.baseline = self.baseline or reading.facts.get("state")
         self.pacnew = reading.facts.get("pacnew", self.pacnew)
         self.reboot = reading.facts.get("reboot", self.reboot)
@@ -425,8 +427,13 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
         body += f" · could also follow: {', '.join(offer['upstream'] for offer in report['offers'])} (arch-update dotfiles --suggest)"
     quiet = report["exit_code"] in (exits.IDLE, exits.READY_FOR_REBOOT, exits.SKIPPED) or exits.interrupted(report["exit_code"])
     urgency = "normal" if quiet else "critical"
-    notice = ["notify-send", f"--urgency={urgency}", f"arch-update auto: {report['state']}", body[:400]]
+    sell = ""
+    if report.get("learned_unshared"):  # kept whole: the 400-character cut takes from the rest
+        count = report["learned_unshared"]
+        sell = f" · your updater learned to fix {count} thing{'s' if count > 1 else ''} on its own. Click to pass {'them' if count > 1 else 'it'} on, so other people's updates fix themselves too"
+    notice = ["notify-send", f"--urgency={urgency}", f"arch-update auto: {report['state']}", body[: 400 - len(sell)] + sell]
     fix = next((item["fix"] for item in report["trouble"] if item["fix"]), AUR_BY_HAND if "aur" in report["held"] else "")
+    fix = fix or ("arch-update census --share" if report.get("learned_unshared") else "")
     terminal = sh.terminal()
     if not (fix and terminal and sh.has("systemd-run")):
         sh.capture(notice, timeout=10)
@@ -457,6 +464,11 @@ def look(sh: Shell | None = None) -> list[dict[str, Any]]:
     """
     world = World(sh or Shell(), load_json(CONFIG_PATH) if CONFIG_PATH.is_file() else None, [], "look", None, dry_run=True)
     return [asdict(verdict) for verdict in world.look()]
+
+
+def hold(sh: Shell, config: dict[str, Any] | None) -> Verdict | None:
+    """What would stop the run before it changes anything (watch.GATES), or None. Reads only, like the look."""
+    return watch.held(World(sh, config, [], "gate", None, dry_run=True).scene())
 
 
 def run_auto(
@@ -517,6 +529,9 @@ def run_auto(
             offers = discover.as_dicts(discover.news(looking.result(timeout=60), STATE_ROOT)) if looking is not None else []
         except Exception:  # noqa: BLE001 - a suggestion that broke is no reason to lose the week's report
             offers = []
+        learned_unshared = 0
+        if not dry_run:  # fixes learned here that nobody upstream has: named once in the notice, a click shares them
+            learned_unshared = len(share_report.should_offer(world.cases, STATE_ROOT, world.config))
         code = 128 + world.signum if world.interrupted else exits.TOOL_FAILURE if crash else exit_code(out, world)
         report = {
             "run_id": run_id,
@@ -535,6 +550,7 @@ def run_auto(
             "updated": world.updated,
             "held": world.held,
             "offers": offers,
+            "learned_unshared": learned_unshared,
             "repairs": world.repairs,
             "pacnew": world.pacnew,
             "reboot_required": world.reboot,

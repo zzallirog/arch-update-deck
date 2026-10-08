@@ -909,3 +909,16 @@ def test_sigterm_while_a_store_runs_leaves_it_alone_and_ends_the_run_as_interrup
     assert report["child_stopped"] is False, "it was not sent anything and it ended with 0: it finished"
     assert report["trouble"][0]["detail"] == "stopped by SIGTERM"
     assert signal.getsignal(signal.SIGTERM) == before and json.loads((box.root / "last-auto.json").read_text())["state"] == "INTERRUPTED"
+
+
+def test_a_week_after_a_fix_was_learned_the_notice_offers_sharing_it_once(box) -> None:
+    from arch_updater import briefs
+
+    box.sh.tools |= {"systemd-run", "kitty"}
+    (box.root / census.LOCAL_FILE).write_text(json.dumps([{"id": briefs.LEARNED + "aa", "match": "x", "fix": "true", "store": "repo"}]))
+    box.run()
+    asked = box.sh.calls[-1]
+    assert "--setenv=FIX=arch-update census --share" in asked
+    assert any("fix themselves" in str(word) for word in asked), asked
+    box.run()  # offered once: not again
+    assert not any("fix themselves" in str(word) for call in box.sh.calls[-1:] for word in call)
