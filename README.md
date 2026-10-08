@@ -60,9 +60,10 @@ arch-update census           # what this machine learned: [ ] only here · [x] h
 arch-update census --share   # one GitHub issue, filled in, home folder and login taken out; you press Submit
 ```
 
-The tool sends nothing by itself. Each learned fix is offered for sharing
-once, at the `learn` prompt when you run it in a terminal, and then never
-again; `"share": false` in the configuration turns even the offer off.
+The tool sends nothing by itself. It asks twice at most for each fix: when
+you `learn` it, and once more the first time that fix repairs a failure by
+itself. If an assistant ran `learn` for you, the question waits for you in the
+next notice. `"share": false` in the configuration turns even the asking off.
 
 This is the ask. It has met one machine so far. Show it yours. Download it,
 break it, fix it, send your census, and let us build one shared base of what
@@ -136,7 +137,7 @@ configuration and says so under `PENDING`. That is the whole first update.
 | State: runs, briefs, census, the pre-update record | `~/.local/state/arch-updater/` |
 | The sudoers rules, once you install them | `/etc/sudoers.d/zzz-arch-update-auto` |
 
-Version 0.20.01. Written for one machine first; expect rough edges, and send
+Version 0.20.02. Written for one machine first; expect rough edges, and send
 them in. [docs/REFERENCE.md](docs/REFERENCE.md) has every command, key, exit
 status, configuration key and file.
 

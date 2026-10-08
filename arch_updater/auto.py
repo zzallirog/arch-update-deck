@@ -85,6 +85,7 @@ class World:
         self.updated: dict[str, int] = {}
         self.held: dict[str, Any] = {}  # what this run deliberately left alone, and why
         self.repairs: list[dict[str, Any]] = []
+        self.replayed: list[str] = []  # learned cases whose command fixed a dotfiles step in this run
         self.outputs: dict[str, str] = {}  # each failed store's whole output
         self.where: dict[str, str] = {}  # the folder a failed store's fix runs in ("" = home)
         self.hints: dict[str, list[str]] = {}  # where a person should look, per failed store
@@ -211,6 +212,7 @@ class World:
             self.note("store", name=repo.name, phase="start")
             outcome = dotfiles.update(self, repo, fetched.get(repo.path))
             self.note("store", name=repo.name, phase="done", changed=int(outcome.moved), ok=not outcome.case, replayed=outcome.replayed)
+            self.replayed += outcome.replayed
             if outcome.held:
                 self.held.setdefault("dotfiles", []).extend(outcome.held)
             if outcome.moved:
@@ -421,6 +423,9 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
         return
     body = report["crash"] or "; ".join(f"{item['probe']}: {cause(item['detail'])} → {item['fix']}" for item in report["trouble"])
     body = body or f"updated: {report['updated'] or 'nothing'}"
+    if report.get("self_fixed"):
+        count = len(report["self_fixed"])
+        body += f" · fixed by itself: {count} failure{'s' if count > 1 else ''} it learned here"
     if report["held"]:
         body += f" · held: {', '.join(report['held'])}"
     if report.get("offers"):
@@ -529,9 +534,14 @@ def run_auto(
             offers = discover.as_dicts(discover.news(looking.result(timeout=60), STATE_ROOT)) if looking is not None else []
         except Exception:  # noqa: BLE001 - a suggestion that broke is no reason to lose the week's report
             offers = []
+        # What this run fixed by itself with a command learned here; it counts only when the run ended well.
+        proved = sorted({item["case"] for item in world.repairs if item["repair"] == "replay" and item["attempted"]} | set(world.replayed))
+        proved = proved if out > 0 and not crash else []
         learned_unshared = 0
-        if not dry_run:  # fixes learned here that nobody upstream has: named once in the notice, a click shares them
-            learned_unshared = len(share_report.should_offer(world.cases, STATE_ROOT, world.config))
+        if not dry_run:  # fixes learned here that nobody upstream has: named in the notice, a click shares them
+            # Remembered as offered only when there is a notice to carry the offer; otherwise it stays owed.
+            offer = share_report.should_offer if sh.has("notify-send") else share_report.pending_offers
+            learned_unshared = len(offer(world.cases, STATE_ROOT, world.config, proved))
         code = 128 + world.signum if world.interrupted else exits.TOOL_FAILURE if crash else exit_code(out, world)
         report = {
             "run_id": run_id,
@@ -551,6 +561,7 @@ def run_auto(
             "held": world.held,
             "offers": offers,
             "learned_unshared": learned_unshared,
+            "self_fixed": proved,
             "repairs": world.repairs,
             "pacnew": world.pacnew,
             "reboot_required": world.reboot,

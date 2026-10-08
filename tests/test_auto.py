@@ -922,3 +922,23 @@ def test_a_week_after_a_fix_was_learned_the_notice_offers_sharing_it_once(box) -
     assert any("fix themselves" in str(word) for word in asked), asked
     box.run()  # offered once: not again
     assert not any("fix themselves" in str(word) for call in box.sh.calls[-1:] for word in call)
+
+
+def test_with_no_notice_to_carry_it_the_offer_waits_for_one(box) -> None:
+    from arch_updater import briefs
+
+    box.sh.tools |= {"systemd-run", "kitty"}
+    box.sh.tools -= {"notify-send"}
+    (box.root / census.LOCAL_FILE).write_text(json.dumps([{"id": briefs.LEARNED + "aa", "match": "x", "fix": "true", "store": "repo"}]))
+    assert box.run()["learned_unshared"] == 1
+    box.sh.tools |= {"notify-send"}
+    box.run()
+    assert any("fix themselves" in str(word) for word in box.sh.calls[-1]), "the first run could not show it, so this one does"
+
+
+def test_the_notice_says_what_the_run_fixed_by_itself(box) -> None:
+    from arch_updater import auto
+
+    report = {"crash": None, "trouble": [], "updated": {"repo": 3}, "held": {}, "exit_code": 0, "state": "IDLE", "self_fixed": ["LOCAL-LEARNED-aa"]}
+    auto.announce(box.sh, report)
+    assert any("fixed by itself: 1 failure it learned here" in str(word) for word in box.sh.calls[-1]), box.sh.calls[-1]

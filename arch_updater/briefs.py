@@ -125,6 +125,11 @@ def write(
             command,
             "```",
             "",
+            "## Then pass it on",
+            "If `learn` ends with a line about fixes not passed on yet, say so to the person in your own words:"
+            " `arch-update census --share` opens a GitHub issue with the census filled in, and they press Submit."
+            " Leave the pressing to them.",
+            "",
         ]
     )
     (folder / "brief.md").write_text(text, encoding="utf-8")

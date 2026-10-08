@@ -17,7 +17,7 @@ from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
 from .scheduler import AUTO_UNIT, is_due, PATROL_UNIT, auto_status, remove_timer, install_daily_patrol_timer, install_weekly_auto_timer, last_patrol_report, run_patrol, scheduler_status
 from .census import load as census_cases
-from .share_report import issue_url, mark, mark_sent, sanitize_patrol_report, share_census, should_offer, unsent
+from .share_report import issue_url, mark, mark_sent, pending_offers, sanitize_patrol_report, share_census, should_offer, unsent
 from .textsafe import clean
 from .transcripts import write_session_report
 
@@ -113,9 +113,19 @@ def _share_pending() -> bool:
 
 
 def _offer_share() -> None:
-    """Right after a fix was learned, once per fix: one key to hand upstream all that is not there yet. Never sent unasked."""
-    fresh = should_offer(census_cases(STATE_ROOT), STATE_ROOT, load_json(auto.CONFIG_PATH) if auto.CONFIG_PATH.is_file() else None)
-    if not fresh or not sys.stdin.isatty():
+    """Right after a fix was learned: one key to hand upstream all that is not there yet. Never sent unasked.
+
+    Without a terminal nobody can answer (an assistant ran `learn`, or a script): the line says how to pass it on, and
+    the offer stays owed, so the next notice still makes it to the person.
+    """
+    config = load_json(auto.CONFIG_PATH) if auto.CONFIG_PATH.is_file() else None
+    if not sys.stdin.isatty():
+        owed = pending_offers(census_cases(STATE_ROOT), STATE_ROOT, config)
+        if owed:
+            print(f"not passed on yet: {len(owed)} learned fix{'es' if len(owed) > 1 else ''}. `arch-update census --share` opens a GitHub issue with the census filled in; a person presses Submit")
+        return
+    fresh = should_offer(census_cases(STATE_ROOT), STATE_ROOT, config)
+    if not fresh:
         return
     print(f"\nYour updater just learned to fix {len(fresh)} thing{'s' if len(fresh) > 1 else ''} on its own.")
     print("Pass it on, so other people's updates fix themselves too? [Enter] yes (opens a page; you press Submit)  [n] not now ", end="", flush=True)

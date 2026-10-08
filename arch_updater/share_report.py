@@ -13,7 +13,8 @@ CENSUS_SCHEMA = "arch-update-census/v1"
 UPSTREAM = "https://github.com/zzallirog/arch-update-deck"
 URL_BUDGET = 7000  # browsers and GitHub cut longer links; past it the issue says to attach the file instead
 SENT = "census-sent.json"  # in the state directory: the local cases already handed upstream
-OFFERED = "census-offered.json"  # in the state directory: the learned fixes already offered once
+OFFERED = "census-offered.json"  # in the state directory: the offers a person has already been shown
+PROVED = "#replayed"  # the second offer of a fix: after it fixed a failure by itself
 
 
 def issue_url(shared: dict) -> str:
@@ -55,26 +56,50 @@ def mark_sent(cases: list[Any], state_root: Any) -> None:
     path.write_text(json.dumps(sorted(_sent(state_root) | {case.id for case in cases})), encoding="utf-8")
 
 
-def should_offer(cases: list[Any], state_root: Any, config: dict | None = None) -> list[Any]:
-    """The learned fixes to offer this time: each one once, never again after that; none with "share": false.
+def _offers(cases: list[Any], state_root: Any, config: dict | None, proved: Any) -> tuple[set[str], list[tuple[Any, str]]]:
+    """What a person was already shown, and each learned fix still owed an offer with the name that offer is kept under."""
+    if (config or {}).get("share") is False:
+        return set(), []
+    import json
+
+    try:
+        offered = set(json.loads((state_root / OFFERED).read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        offered = set()
+    owed = []
+    for case in unsent(cases, state_root):
+        if not case.id.startswith("LOCAL-LEARNED-"):
+            continue
+        if case.id not in offered:
+            owed.append((case, case.id))
+        elif case.id in proved and case.id + PROVED not in offered:
+            owed.append((case, case.id + PROVED))
+    return offered, owed
+
+
+def pending_offers(cases: list[Any], state_root: Any, config: dict | None = None, proved: Any = ()) -> list[Any]:
+    """The learned fixes a person has not been asked about yet. Writes nothing: asking is the caller's part.
+
+    A fix is offered when it is learned, and once more the first time it fixes a failure by itself (`proved`: the
+    cases replayed in a run that ended well). After that, never again; none with "share": false; none already sent.
+    """
+    return [case for case, _ in _offers(cases, state_root, config, proved)[1]]
+
+
+def should_offer(cases: list[Any], state_root: Any, config: dict | None = None, proved: Any = ()) -> list[Any]:
+    """`pending_offers`, remembered as shown: call it only where a person does see the question.
 
     Sharing is optional and apart from the update itself: this only decides whether the question is asked, and
     remembers that it was. Nothing is ever sent from here.
     """
-    if (config or {}).get("share") is False:
-        return []
     import json
 
-    path = state_root / OFFERED
-    try:
-        offered = set(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, ValueError, TypeError):
-        offered = set()
-    fresh = [case for case in unsent(cases, state_root) if case.id.startswith("LOCAL-LEARNED-") and case.id not in offered]
-    if fresh:
+    offered, owed = _offers(cases, state_root, config, proved)
+    if owed:
+        path = state_root / OFFERED
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(sorted(offered | {case.id for case in fresh})), encoding="utf-8")
-    return fresh
+        path.write_text(json.dumps(sorted(offered | {name for _, name in owed})), encoding="utf-8")
+    return [case for case, _ in owed]
 
 
 def mark(case: Any, state_root: Any, sent: set[str] | None = None) -> str:

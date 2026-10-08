@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.01. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.02. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -222,7 +222,7 @@ is caught only by Update Day.
 | `dotfiles [--only PATH] [--suggest] [--add PATH [--install CMD] [--check CMD]]` | Without a flag: brings the repositories under `dotfiles` to their newest release now, whatever their 30 days; exit 1 if one is left broken (with a brief). `--suggest` and `--add`: see [Dotfiles](#dotfiles). |
 | `brief [FOLDER]` | Prints the newest brief with no fix saved, or the one in `FOLDER`. See [Failures that teach](#failures-that-teach). |
 | `learn [--brief FOLDER] --match RE --how TEXT --command CMD` | Runs the fix, checks that it settles the failure, and saves it as a census case; refused (exit 1, nothing saved) otherwise. See [Failures that teach](#failures-that-teach). |
-| `census [--share [--json]]` | Lists the cases this machine recorded or learned: `[ ]` only here, `[x]` already handed upstream, and the count of `*` official ones (shipped with the tool, `"origin": "official"` in the catalogue). `--share` opens one GitHub issue with every case not yet handed upstream filled in (home folder written `~`, login `<user>`, each `"origin": "local"`) and marks them `[x]`; you press Submit, or close the tab. Nothing is chosen case by case, and nothing is sent by the tool itself. Without a desktop it prints the link; `--json` prints every local case as JSON. Sharing is optional and apart from the update: each learned fix is offered once, at the `learn` prompt, and is then counted as offered whether you answered or not; a `learn` outside a terminal asks nothing and counts the same. A fix learned with `"share": false` in auto.json, or added to `census.json` by hand, is named once in the weekly notice instead; a click on that notice runs `census --share` when no problem has a `fix` of its own and the AUR was not held. `"share": false` turns the offer off. |
+| `census [--share [--json]]` | Lists the cases this machine recorded or learned: `[ ]` only here, `[x]` already handed upstream, and the count of `*` official ones (shipped with the tool, `"origin": "official"` in the catalogue). `--share` opens one GitHub issue with every case not yet handed upstream filled in (home folder written `~`, login `<user>`, each `"origin": "local"`) and marks them `[x]`; you press Submit, or close the tab. Nothing is chosen case by case, and nothing is sent by the tool itself. Without a desktop it prints the link; `--json` prints every local case as JSON. Sharing is optional and apart from the update. Each learned fix is offered twice at most: at the `learn` prompt, and once more in the notice of the first run in which that fix repaired a failure by itself and the run ended well. An offer counts as made only where a person is shown it: a `learn` outside a terminal (an assistant or a script ran it) prints one line naming `census --share` and leaves the offer for the next notice, and a run with no `notify-send` leaves it for the next one that has it. A click on the notice runs `census --share` when no problem has a `fix` of its own and the AUR was not held. `"share": false` turns the offer off, and a fix already handed upstream is never offered. |
 | `vault [--classify TEXT]` | Prints the shipped catalogue of known failures as JSON, or only the entries whose pattern matches `TEXT`. |
 | `cve` | Prints the `arch-audit` findings as JSON (`available`, `findings`, `count`, `error`). Exit 0 even when `arch-audit` is missing. |
 | `scan-sessions [--output-dir DIR] [--json]` | See [Session scanner](#session-scanner). |
@@ -241,6 +241,20 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.02
+
+- A fix learned outside a terminal is no longer counted as offered. `learn`
+  prints one line that names `arch-update census --share`, and the offer is
+  made in the next notice. Before, an assistant that ran `learn` used the
+  offer up and nobody saw it.
+- A run with no `notify-send` no longer uses an offer up either.
+- A fix is offered a second and last time in the notice of the first run in
+  which it repaired a failure by itself. That notice also says
+  `fixed by itself: N failure(s) it learned here`, and the report carries the
+  cases under `self_fixed`.
+- A brief ends with `Then pass it on`: a note for whoever fixes the failure
+  to tell the person about `census --share` and leave Submit to them.
 
 ### Changed in 0.20.01
 
@@ -732,13 +746,15 @@ Requirements of ask mode:
 
 If `notify-send` exists, every update that is not a dry run sends a desktop
 notification, including one started with `y`: the state and the problems, each
-with its `fix`. A skipped run (status 80) sends one too. Urgency is critical
+with its `fix`. A run that repaired a failure with a fix learned on this
+machine, and ended well, adds `fixed by itself: N failure(s) it learned here`.
+A skipped run (status 80) sends one too. Urgency is critical
 unless the status is 0, 10, 80 or an interrupt (129, 130, 143).
 
 Clicking the notification opens a terminal on the `fix` of the first problem
 that has one, or on `yay -Sua` if only the AUR was held, or on
-`arch-update census --share` if nothing hangs and a learned fix has not been
-offered upstream yet. This needs a terminal
+`arch-update census --share` if nothing hangs and a learned fix is still owed
+an offer. This needs a terminal
 found as described above, `systemd-run`, and a `notify-send` that supports
 `--wait` and `--action`. The `fix` runs as your user; those that start with
 `sudo` ask for your password in that terminal.
@@ -820,7 +836,7 @@ file `arch-update auto` exits 70.
 | `quiet` | `false` turns off the quiet gate and the ceiling of the timer's run. Default on. See [Quiet](#quiet). |
 | `quiet_pressure` | Limits for the gate, as `{"cpu": 40, "memory": 10, "io": 30}`: the "some avg60" of `/proc/pressure/<kind>` above which the run waits. |
 | `quiet_share` | The timer's run gets one thread of every `quiet_share`-th physical core it may use (default 4: a quarter), at 60 % of a CPU each. |
-| `share` | `false`: never offer to share what this machine learned (`arch-update census --share` still works by hand). Default: each learned fix is offered once, at the `learn` prompt. |
+| `share` | `false`: never offer to share what this machine learned (`arch-update census --share` still works by hand). Default: each learned fix is offered at the `learn` prompt and once more after it first repairs a failure by itself. |
 | `dotfiles_every_days` | Days between visits of each dotfiles repository. Default 30. A failed one is tried at the next run. |
 | `dotfiles` | Git repositories to keep at their newest release, after the package stores. Each is a path, or `{"path": "~/dots-hyprland", "install": "./setup install", "check": "...", "track": "release"}`. See [Dotfiles](#dotfiles). Default: none. |
 
@@ -1033,13 +1049,13 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `~/.config/arch-updater/auto.json` | Configuration. |
 | `runs/auto-<time>/run.log` | Output of the commands the update executed through its command wrapper: the store updates, repairs, the `tar` of `/etc`. The probes (`sudo -n true`, `pacman -Dk`, package listings, `checkupdates`) are not logged. |
 | `runs/auto-<time>/tokens.jsonl` | Check results, repairs and control-flow events. |
-| `runs/auto-<time>/report.json` | Result of the run: `run_id`, `started_at`, `finished_at`, `dry_run`, `out`, `exit_code`, `signal` and `child_stopped` (set only when a signal ended the run, otherwise `null`), `state`, `looks`, `crash`, `trouble`, `verdicts`, `updated`, `held`, `repairs`, `pacnew`, `reboot_required`, `wrote` (the run directory), and a `cve` block with the `arch-audit` findings (they never change the exit status). |
+| `runs/auto-<time>/report.json` | Result of the run: `run_id`, `started_at`, `finished_at`, `dry_run`, `out`, `exit_code`, `signal` and `child_stopped` (set only when a signal ended the run, otherwise `null`), `state`, `looks`, `crash`, `trouble`, `verdicts`, `updated`, `held`, `offers`, `learned_unshared` (how many learned fixes this run's notice offered to share), `self_fixed` (the learned cases that repaired a failure in this run), `repairs`, `pacnew`, `reboot_required`, `wrote` (the run directory), and a `cve` block with the `arch-audit` findings (they never change the exit status). |
 | `runs/kernel-<time>/run.log` | Kernel selection. |
 | `last-auto.json` | `report.json` of the last update that was not a dry run, an interrupted one included. Source of `PENDING` and of the `l` key. A run that stopped at a check has this report but no `run.log`. |
 | `last-patrol.json`, `patrol-history.json` | The last patrol, and a summary of the last 12. |
 | `census.json` | Failures first seen on this machine, and the fixes learned here with `arch-update learn`, for package stores and dotfiles repositories alike. |
 | `census-sent.json` | The local cases already handed to a GitHub issue by `census --share`, listed as `[x]`. |
-| `census-offered.json` | The learned fixes already offered for sharing once. |
+| `census-offered.json` | The offers to share a learned fix that a person was already shown: the fix's id, and the id with `#replayed` for the second one. |
 | `briefs/<run>-<store>/` | One folder per failure left standing: `brief.md`, `failure.log`, `meta.json`. See [Failures that teach](#failures-that-teach). |
 | `drift/<repository>.md` | The drift report of each dotfiles repository, rewritten at every visit and by `dotfiles --drift`. |
 | `dotfiles.json` | When each dotfiles repository was last visited and left nothing broken. |

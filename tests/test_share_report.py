@@ -148,6 +148,51 @@ def test_each_learned_fix_is_offered_once_and_share_false_offers_none(tmp_path) 
     assert should_offer(later, tmp_path) == []  # already handed upstream
 
 
+def test_looking_at_what_is_owed_does_not_use_the_offer_up(tmp_path) -> None:
+    from arch_updater.census import Case
+    from arch_updater.share_report import OFFERED, pending_offers, should_offer
+
+    cases = [Case(id="LOCAL-LEARNED-a", fix="true")]
+    assert [case.id for case in pending_offers(cases, tmp_path)] == ["LOCAL-LEARNED-a"]
+    assert not (tmp_path / OFFERED).exists(), "nobody was asked, so nothing is remembered as asked"
+    assert [case.id for case in should_offer(cases, tmp_path)] == ["LOCAL-LEARNED-a"], "the offer is still there for the person"
+    assert pending_offers(cases, tmp_path) == []
+
+
+def test_a_fix_that_worked_by_itself_is_offered_once_more_and_then_never(tmp_path) -> None:
+    from arch_updater.census import Case
+    from arch_updater.share_report import mark_sent, should_offer
+
+    cases = [Case(id="LOCAL-LEARNED-a", fix="true"), Case(id="LOCAL-LEARNED-b", fix="true")]
+    assert len(should_offer(cases, tmp_path)) == 2  # when learned
+    assert should_offer(cases, tmp_path) == []
+    assert [case.id for case in should_offer(cases, tmp_path, proved=["LOCAL-LEARNED-a"])] == ["LOCAL-LEARNED-a"]
+    assert should_offer(cases, tmp_path, proved=["LOCAL-LEARNED-a"]) == [], "the second offer is the last"
+    assert should_offer(cases, tmp_path, {"share": False}, proved=["LOCAL-LEARNED-b"]) == []
+    mark_sent([cases[1]], tmp_path)
+    assert should_offer(cases, tmp_path, proved=["LOCAL-LEARNED-b"]) == [], "already handed upstream"
+
+
+def test_learn_without_a_terminal_says_how_to_pass_it_on_and_keeps_the_offer_owed(tmp_path, monkeypatch, capsys) -> None:
+    from arch_updater import auto
+    from arch_updater import main as cli
+    from arch_updater.census import Case
+    from arch_updater.share_report import pending_offers
+
+    cases = [Case(id="LOCAL-LEARNED-a", fix="true")]
+    monkeypatch.setattr(cli, "STATE_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "census_cases", lambda root: cases)
+    monkeypatch.setattr(auto, "CONFIG_PATH", tmp_path / "none.json")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
+    cli._offer_share()
+    said = capsys.readouterr().out
+    assert "not passed on yet: 1 learned fix." in said and "arch-update census --share" in said and "presses Submit" in said
+    assert [case.id for case in pending_offers(cases, tmp_path)] == ["LOCAL-LEARNED-a"], "an assistant ran learn: the person has not been asked yet"
+    (tmp_path / "none.json").write_text('{"share": false}')
+    cli._offer_share()
+    assert capsys.readouterr().out == "", "sharing is off: not a word about it"
+
+
 def test_the_shipped_catalogue_is_official_and_a_shared_case_is_local() -> None:
     import json
 
