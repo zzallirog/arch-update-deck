@@ -43,7 +43,7 @@ class Machine(Shell):
     """A machine where everything works; a test breaks one thing."""
 
     def __init__(self, *tools):
-        self.tools = {"pacman", "yay", "notify-send", *tools}
+        self.tools = {"pacman", "yay", "notify-send", "arch-update-aur-install", *tools}
         self.packages = ["a 1"]
         self.fail: dict[str, list] = {}  # store or command name -> results that replace success
         self.ran: list[list[str]] = []  # commands that change the machine
@@ -399,7 +399,7 @@ MATRIX = [
 
 @pytest.mark.parametrize(("tools", "failing", "kind"), MATRIX, ids=lambda value: "+".join(value) if isinstance(value, tuple) else str(value))
 def test_one_store_failing_never_stops_the_others(box, tools, failing, kind) -> None:
-    box.sh.tools = {"pacman", "notify-send", *tools}
+    box.sh.tools = {"pacman", "notify-send", "arch-update-aur-install", *tools}
     present = ["repo", *(STORE_OF_TOOL[tool] for tool in tools)]
     output = {"repairable": NOT_FOUND, "unrepairable": CONFLICT, "unseen": UNSEEN, "none": ""}[kind]
     if failing:
@@ -505,7 +505,8 @@ def test_aur_packages_changed_in_the_last_days_wait(box) -> None:
     box.sh.aur["results"] = [{"Name": "old", "LastModified": now - 10 * 86400}, {"Name": "new", "LastModified": now - 3600}]
     report = box.run()
     yay = next(argv for argv in box.sh.ran if argv[0] == "yay")
-    assert yay[-2:] == ["--ignore", "new"] and report["held"] == {"aur_too_fresh": ["new"]}
+    assert yay[-7:] == ["--ignore", "new", "--noremovemake", "--sudo", "/usr/bin/arch-update", "--sudoflags", "aur-handoff"]
+    assert report["held"] == {"aur_too_fresh": ["new"]}
     box.config(aur_min_age_days=30)
     assert box.run()["held"] == {"aur_too_fresh": ["new", "old"]}
 
@@ -734,8 +735,8 @@ def test_default_sudoers_rules_are_exact_commands_built_from_what_is_run(box) ->
         "u ALL=(root) NOPASSWD: /usr/bin/dkms autoinstall",
     ]
     assert repairs.sudo(stores.STORES[0].update) == UPGRADE
-    with_aur = auto.sudoers_rules("u", aur=True, sh=box.sh)
-    assert with_aur.count("*") == 4 and "/usr/bin/pacman -U --noconfirm --config /etc/pacman.conf -- " in with_aur
+    with_aur = [line for line in auto.sudoers_rules("u", aur=True, sh=box.sh).splitlines() if not line.startswith("#")]
+    assert with_aur == [*rules, 'u ALL=(root) NOPASSWD: /usr/bin/arch-update-aur-install ""'], "no rule may take a path from the account"
 
 
 def test_the_weekly_unit_runs_this_launcher_and_spares_the_package_manager(tmp_path, monkeypatch) -> None:
@@ -746,7 +747,17 @@ def test_the_weekly_unit_runs_this_launcher_and_spares_the_package_manager(tmp_p
     assert "ExecStart=/opt/deck/bin/arch-update auto --scheduled\n" in service
     assert "KillMode=mixed\n" in service and "SuccessExitStatus=10 80\n" in service
     timer = (tmp_path / "arch-update-auto.timer").read_text()
-    assert "OnCalendar=Sat 12:00\n" in timer and "Persistent=true\n" in timer
+    assert "OnStartupSec=3min\n" in timer and "OnCalendar" not in timer
+    assert "ExecCondition=/opt/deck/bin/arch-update auto --due\n" in service
+
+
+def test_the_visit_is_due_only_when_the_last_one_is_three_days_old(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(scheduler, "STATE_ROOT", tmp_path)
+    assert scheduler.is_due() is True  # no visit on record
+    (tmp_path / "ask-result.json").write_text("{}")
+    assert scheduler.is_due() is False
+    later = scheduler.datetime.now().astimezone() + scheduler.timedelta(days=3, minutes=1)
+    assert scheduler.is_due(now=later) is True
 
 
 def test_a_logged_command_is_on_disk_before_it_runs_and_does_not_read_stdin(tmp_path) -> None:

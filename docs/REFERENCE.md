@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.18.0. Nothing here is needed
+Details for [README.md](../README.md), version 0.19.0. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -18,7 +18,7 @@ By what each program is used for.
 | `.pacnew` listing | `pacdiff` (`pacman-contrib`) | No `.pacnew` files are listed. |
 | Timers | `systemd --user`, `systemctl` | `schedule` cannot install the timers. |
 | Weekly run while logged out | Lingering: `loginctl enable-linger` | The user manager, and with it the timer, runs only while you are logged in. |
-| AUR | `yay` or `paru`: the first one installed lists the waiting packages (Update Day, `status`, patrol) and, with `unattended_aur`, builds them. Rules for `auto --sudoers --aur` exist for `yay` only | No AUR rows, no AUR updates. See [AUR](../README.md#aur). |
+| AUR | `yay` or `paru`: the first one installed lists the waiting packages (Update Day, `status`, patrol) and, with `unattended_aur`, builds them; an unattended build uses `yay` only, and needs the root shim | No AUR rows, no AUR updates. See [AUR](../README.md#aur). |
 | Flatpak, Snap | `flatpak`, `snap` | Those stores are skipped. |
 | Desktop notice | `notify-send` (package `libnotify`) | No notification is sent. |
 | Click-to-fix | `systemd-run`, a recognised terminal (see [Schedule and ask mode](#schedule-and-ask-mode)), and a `notify-send` that supports `--wait` and `--action` | The notice has no click action. |
@@ -236,6 +236,19 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
 
+### Changed in 0.19.0
+
+- The timer no longer runs on Saturday at 12:00. It fires 3 minutes after login
+  and once a day after that; `arch-update auto --due` lets a run through only
+  when the last one is 3 days old. Run `arch-update schedule --install-auto`
+  again to rewrite the unit files.
+- `auto --sudoers --aur` no longer prints the four `yay` rules ending in `*`. It
+  prints one rule for the root shim, with no arguments, and an unattended AUR
+  update needs that shim (see [AUR in detail](#aur-in-detail)). Replace the old
+  sudoers file: the `*` rules are no longer used, and they still hand root to
+  any process of your account while they are installed.
+- `aur_min_age_days` defaults to 7 (was 4).
+
 ### Removed in 0.18.0
 
 The looping menu and its helpers are gone: the commands `menu`, `plan`, `run`,
@@ -285,7 +298,7 @@ in the profile file. `arch-update` with no command opens Update Day instead.
   (`shell.TRANSACTION_TOOLS`: `pacman`, `yay`, `paru`, `paccache`, `mkinitcpio`,
   `dkms`, `snap`, `flatpak`, `grub-mkconfig`). The checks, the queue reads and
   the `tar` of `/etc` (600 s) do.
-- A sudoers `*` appears in the generated rules only with `--aur`.
+- The generated sudoers rules contain no `*`; with `--aur` the shim's rule takes no arguments.
 
 ## Free space on `/`
 
@@ -305,25 +318,57 @@ space left on device`.
   as `auto --status` and the notification print it). Update Day shows `by hand:
   yay -Sua`. Update it with `yay -Sua`, or click the notification.
 - With `true`, `yay -Sua --noconfirm --answerclean None --answerdiff None
-  --answeredit None --sudoflags -n` builds the packages (`paru`:
-  `-Sua --noconfirm --skipreview --sudoflags -n`). Nobody reads the `PKGBUILD`
-  or the diff before it runs.
+  --answeredit None --noremovemake --sudo <arch-update> --sudoflags aur-handoff`
+  builds the packages. Nobody reads the `PKGBUILD` or the diff before it runs.
+  Only `yay` is used for an unattended build; with `paru` alone the AUR is held.
+  Without the root shim (`/usr/local/libexec/arch-update-aur-install`, owned by
+  root, writable by nobody else) the AUR is held too.
 - The names of all foreign packages (`pacman -Qqm`) are sent to the AUR RPC.
-  Packages changed in the AUR within `aur_min_age_days` (default 4) are passed
-  to `--ignore`. This is a cool-down that gives other people time to find and
-  report a bad package; it does not check the package.
+  Packages changed in the AUR within `aur_min_age_days` (default 7) are passed
+  to `--ignore` and listed under `held` as `aur_too_fresh`. A waiting update of
+  a VCS package (name ending `-git`, `-svn`, `-hg`, `-bzr`, `-darcs`, `-cvs`,
+  `-nightly`), of an orphan, or of a package whose maintainer differs from the
+  one recorded when it was last up to date (`aur-maintainers.json` in the state
+  folder) is passed to `--ignore` too, under `aur_by_hand`. Updating it yourself
+  records the new maintainer. This is a cool-down and a few red flags; it does
+  not check what the package does.
 - If the age lookup fails, the AUR is not updated. That failure
   (`AUR-UNREACHABLE`) has a repair, a wait of 60 s, after which the lookup is
   tried again.
-- `arch-update auto --sudoers --aur` adds four rules written for `yay` only
-  (none for `paru`): `pacman -U --noconfirm --config /etc/pacman.conf --
-  <cache>/*`, `pacman -D -q --asexplicit --noconfirm --config /etc/pacman.conf
-  -- *`, `pacman -D -q --asdeps --noconfirm --config /etc/pacman.conf -- *`
-  and `pacman -S --noconfirm --config /etc/pacman.conf --asdeps -- *`.
-  `<cache>` is the `yay` cache under `XDG_CACHE_HOME` (default `~/.cache`) at the
-  moment you print the rules. The `*` is a sudoers wildcard, so the rules are
-  not limited to one package: any process running as your user can install an
-  arbitrary package as root.
+- `arch-update aur-handoff` is what `yay` runs instead of `sudo`. It answers
+  `pacman -D -q --asexplicit|--asdeps ...` with success and does nothing (an
+  update keeps the install reason). It accepts exactly `pacman -U --noconfirm
+  --config /etc/pacman.conf -- <files>` and refuses everything else with exit 1,
+  so a build that needs a new dependency from the repositories fails and is
+  reported. It checks the files as the shim will, reads the AUR age of each
+  package again (an entry that changed while the run was building is refused),
+  copies the files into `~/.cache/arch-updater/aur-stage`, runs
+  `sudo -n /usr/local/libexec/arch-update-aur-install` and empties the stage.
+- The shim (`arch_updater/aur_root.py`, installed as
+  `/usr/local/libexec/arch-update-aur-install`) is run by sudo with no
+  arguments. It opens the stage of the calling account (`SUDO_UID`) without
+  following links, copies each `*.pkg.tar.zst` into a new folder under
+  `/var/cache/arch-update-aur` (mode 0700) and checks the copies. Every package
+  must be an installed foreign package at the same version (a rebuild) or a
+  newer one; it must add no `conflict`, `replaces` or `provides`; it must have
+  no `.INSTALL`, no metadata file besides `.PKGINFO`, `.BUILDINFO`, `.MTREE`,
+  `.CHANGELOG`, no setuid or setgid bit, no file writable by anyone, no hard
+  link, device or fifo, no extended attribute or ACL, no member not owned by
+  root, no path through a link of the same package or through a link already on
+  disk that leads elsewhere. Files may lie under `opt/`, `usr/bin/`,
+  `usr/share/{applications,icons,pixmaps,doc,licenses,man,locale,metainfo}/`,
+  the shell completion folders, `usr/src/debug/`, `usr/lib/debug/`, and
+  `usr/lib/<x>/`, `usr/share/<x>/`, `usr/include/<x>/` where `<x>` is the
+  package's name (without `-bin` or `-appimage`) or a folder its installed
+  version already has, and is not a folder root reads (`systemd`, `udev`,
+  `security`, `modules`, `libalpm`, `polkit-1`, `dbus-1` and others). A link may
+  point into those places or at an existing file (not a folder) under
+  `/usr/lib` or `/usr/share`. One refusal refuses the batch: exit 2, nothing
+  installed, every reason printed. Otherwise it runs `pacman -U --noconfirm
+  --config /etc/pacman.conf -- <copies>` and exits 0 or 1.
+- `arch-update auto --sudoers --aur` adds one rule:
+  `<user> ALL=(root) NOPASSWD: /usr/local/libexec/arch-update-aur-install ""`.
+  The `""` allows no argument at all.
 - Without the sudoers rules, Update Day asks for the password once (`sudo -v`)
   and every later command uses `sudo -n` on sudo's ticket. While the update runs
   the tool renews that ticket once a minute (`sudo -n -v`, from
@@ -338,7 +383,7 @@ space left on device`.
 
 ## Root access in detail
 
-Without `--aur`, each rule is one exact command with its arguments fixed:
+Each rule is one exact command with its arguments fixed:
 `true`, `pacman -Syu --noconfirm`, `snap refresh`, `paccache -rk2`,
 `mkinitcpio -P`, `dkms autoinstall`. The program in each rule is looked up only
 in `/usr/bin`, `/usr/sbin`, `/bin` and `/sbin`, never in your `PATH`, and only a
@@ -506,11 +551,14 @@ arch-update schedule --install-auto
 ```
 
 Writes `arch-update-auto.service` and `arch-update-auto.timer` to
-`~/.config/systemd/user/` and enables the timer. It runs Saturday 12:00 local
-time, with up to 30 minutes of random delay, and the timer has
-`Persistent=true`: after a missed Saturday (the machine was off, or you were
-logged out) the run starts when your user manager next starts, at login or, with
-lingering, at boot. The service runs `arch-update auto --scheduled` with
+`~/.config/systemd/user/` and enables the timer. It fires 3 minutes after the
+user manager starts (your login, or boot with lingering) and then once a day
+(`OnStartupSec=3min`, `OnUnitInactiveSec=1d`). The service first runs
+`arch-update auto --due` as its `ExecCondition`: exit 0 when the newer of
+`last-auto.json` and `ask-result.json` is 3 days old or neither exists, exit 1
+otherwise, and systemd then skips the run without marking the unit failed. A
+"not now" answer counts as a visit, so the question comes back after 3 days, not
+at the next login. The service runs `arch-update auto --scheduled` with
 `SuccessExitStatus=10 80`, `KillMode=mixed` and `TimeoutStopSec=150min`, so any
 other exit status leaves the unit failed and visible in
 `systemctl --user --failed`. Its `PATH` is `%h/.local/bin:%h/bin:
@@ -660,7 +708,7 @@ file `arch-update auto` exits 70.
   "keep": "/mnt/other-disk/arch-update",
   "smoke": [{"argv": ["my-app", "--version"], "rebuild": "my-app-git"}],
   "unattended_aur": false,
-  "aur_min_age_days": 4,
+  "aur_min_age_days": 7,
   "ask": false,
   "ask_timeout_minutes": 30
 }
@@ -673,7 +721,7 @@ file `arch-update auto` exits 70.
 | `keep_on_system_disk` | `true` allows `keep` on the same device as `/`. Default `false`. |
 | `smoke` | List of `{"argv": [...], "rebuild": "<package>"}`. Each command runs with a 20 s limit; a program that is not installed is skipped, one that exits non-zero is rebuilt from the AUR. The rebuild needs `unattended_aur` and `yay`; without them the failure is reported. |
 | `unattended_aur` | `true` builds and installs AUR updates without asking. Default `false`. Only the JSON value `true` counts. See [AUR](../README.md#aur). |
-| `aur_min_age_days` | With `unattended_aur`: leave out packages whose AUR entry changed within this many days. Default 4. |
+| `aur_min_age_days` | With `unattended_aur`: leave out packages whose AUR entry changed within this many days. Default 7. |
 | `ask` | `true` makes the timer open Update Day in a terminal before the weekly update. Default `false`. Read only by the timer's run. See [Schedule and ask mode](#schedule-and-ask-mode). |
 | `ask_timeout_minutes` | How long the question waits for an answer, on the timer and by hand. A number greater than 0; anything else falls back to 30. |
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,14 +34,16 @@ RandomizedDelaySec={jitter}
 WantedBy=timers.target
 """
 AUTO_UNIT = "arch-update-auto"
-AUTO_SCHEDULE = "Sat 12:00"
-AUTO_JITTER = "30min"
+AUTO_EVERY_DAYS = 3
+AUTO_SCHEDULE = "3min after login, then once a day while the session lasts; a visit only if the last one is 3 days old"
 AUTO_SERVICE = """[Unit]
-Description=Arch Update Deck: weekly unattended update
+Description=Arch Update Deck: unattended update, offered at login every few days
 
 [Service]
 Type=oneshot
 Environment=PATH=%h/.local/bin:%h/bin:/usr/local/sbin:/usr/local/bin:/usr/bin
+# Not due: systemd skips the run without marking the unit failed.
+ExecCondition={launcher} auto --due
 ExecStart={launcher} auto --scheduled
 SuccessExitStatus=10 80
 # On stop only the run itself is signalled; it lets the package manager finish.
@@ -49,16 +51,32 @@ KillMode=mixed
 TimeoutStopSec=150min
 """
 AUTO_TIMER = """[Unit]
-Description=Arch Update Deck: weekly unattended update
+Description=Arch Update Deck: unattended update, offered at login every few days
 
 [Timer]
-OnCalendar={schedule}
-Persistent=true
-RandomizedDelaySec={jitter}
+OnStartupSec=3min
+OnUnitInactiveSec=1d
 
 [Install]
 WantedBy=timers.target
 """
+
+
+def last_visit() -> datetime | None:
+    """When the owner last answered Update Day's question or an update ran: the newer of the two records."""
+    stamps = []
+    for name in ("last-auto.json", "ask-result.json"):
+        try:
+            stamps.append(datetime.fromtimestamp((STATE_ROOT / name).stat().st_mtime).astimezone())
+        except OSError:
+            continue
+    return max(stamps, default=None)
+
+
+def is_due(now: datetime | None = None, days: int = AUTO_EVERY_DAYS) -> bool:
+    """True when no visit is on record or the last one is `days` old; what the service's ExecCondition asks."""
+    last = last_visit()
+    return last is None or (now or datetime.now().astimezone()) - last >= timedelta(days=days)
 
 
 def _unit_properties(unit: str) -> dict[str, str] | None:
@@ -179,7 +197,7 @@ def install_daily_patrol_timer(unit_dir: Path | None = None) -> dict[str, Any]:
     }
 
 
-def install_weekly_auto_timer(schedule: str = AUTO_SCHEDULE, unit_dir: Path | None = None) -> dict[str, Any]:
+def install_weekly_auto_timer(unit_dir: Path | None = None) -> dict[str, Any]:
     """Install the weekly unattended update as unit files, so it survives a reboot.
 
     Any exit but IDLE or READY_FOR_REBOOT leaves the service failed: a blocked
@@ -188,13 +206,13 @@ def install_weekly_auto_timer(schedule: str = AUTO_SCHEDULE, unit_dir: Path | No
     result = _install_unit_pair(
         AUTO_UNIT,
         AUTO_SERVICE.format(launcher=_launcher()),
-        AUTO_TIMER.format(schedule=schedule, jitter=AUTO_JITTER),
+        AUTO_TIMER,
         unit_dir,
     )
     return {
         "installed": result.returncode == 0,
         "unit": f"{AUTO_UNIT}.timer",
-        "schedule": schedule,
+        "schedule": AUTO_SCHEDULE,
         "output": result.output.strip(),
         "promise": "updates every installed store; never reboots, never merges .pacnew",
     }

@@ -545,11 +545,11 @@ def test_no_line_on_the_screen_waits_for_a_click_there_is_none_to_click() -> Non
 
 
 def test_the_ending_names_everything_left_for_a_person() -> None:
-    report = {"updated": {}, "crash": None, "trouble": [], "held": {"aur": "off", "aur_too_fresh": ["new"]}, "pacnew": ["/etc/x.pacnew"], "exit_code": 10, "reboot_required": True}
+    report = {"updated": {}, "crash": None, "trouble": [], "held": {"aur": "off", "aur_too_fresh": ["new"], "aur_by_hand": ["x-git: VCS package, builds whatever upstream has now"]}, "pacnew": ["/etc/x.pacnew"], "exit_code": 10, "reboot_required": True}
     headline, lines = day.summary(report)
     text = "\n".join(lines)
     assert headline == "DONE · REBOOT NEEDED" and "no new versions" in text
-    assert "AUR waits for you; by hand: yay -Sua" in text and "held this week: new" in text and "/etc/x.pacnew" in text and "sudo pacdiff" in text
+    assert "AUR waits for you; by hand: yay -Sua" in text and "held this week: new" in text and "AUR by hand, x-git: VCS package" in text and "/etc/x.pacnew" in text and "sudo pacdiff" in text
     assert "REBOOT" not in day.summary({**report, "reboot_required": False})[0]
 
 

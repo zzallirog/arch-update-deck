@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import aur_handoff
 from .engine import quarantine_missing_aur_caches
 
 if TYPE_CHECKING:
@@ -21,7 +22,7 @@ PACMAN_LOCK = Path("/var/lib/pacman/db.lck")
 PACCACHE = ("paccache", "-rk2")
 MKINITCPIO = ("mkinitcpio", "-P")
 DKMS = ("dkms", "autoinstall")
-REBUILD = ("yay", "-S", "--rebuild", "--noconfirm", "--answerclean", "All", "--answerdiff", "None", "--sudoflags", "-n")
+REBUILD = ("yay", "-S", "--rebuild", "--noconfirm", "--answerclean", "All", "--answerdiff", "None")
 
 
 def sudo(argv: tuple[str, ...] | list[str]) -> list[str]:
@@ -77,7 +78,9 @@ def rebuild_against_new_libraries(world: World) -> bool:
     # A rebuild is an AUR build and install: it obeys the same switch as every other one.
     if not world.rebuild or (world.config or {}).get("unattended_aur") is not True or not world.sh.has("yay"):
         return False
-    world.command([*REBUILD, *world.rebuild])
+    if not aur_handoff.shim_installed(world.sh):
+        return False
+    world.command([*REBUILD, *aur_handoff.flags(world.sh.path("arch-update")), *world.rebuild])
     return True
 
 

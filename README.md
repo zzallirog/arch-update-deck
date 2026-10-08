@@ -48,7 +48,7 @@ longer boots.
 
 ## Status
 
-Version 0.18.0. Written for one machine first; tested on Arch with systemd;
+Version 0.19.0. Written for one machine first; tested on Arch with systemd;
 expect rough edges. Issues welcome.
 
 ## Install
@@ -109,8 +109,8 @@ a starter configuration file and says so under `PENDING`.
   command with its arguments fixed (`auto.sudoers_rules`). Each program is
   looked up only in `/usr/bin`, `/usr/sbin`, `/bin` and `/sbin`, never in your
   `PATH`, and only a file owned by root that group and others cannot write gets
-  a rule (`Shell.root_binary`); otherwise the output has a `# skipped` line. The
-  one exception is `--aur`: see [AUR](#aur).
+  a rule (`Shell.root_binary`); otherwise the output has a `# skipped` line.
+  `--aur` adds one more exact line, for the root shim: see [AUR](#aur).
 - **It never stores your password.** At a terminal it runs `sudo -v` and you
   type the password to `sudo`. While the update runs it refreshes sudo's ticket
   once a minute (`sudo -n -v`, `keepalive.py`) and stops when the update ends.
@@ -141,23 +141,34 @@ Update Day lists AUR packages and marks them `AUR · BY HAND`. With
 `"unattended_aur": false` (the default) `y` does not build them; the result
 screen says so, and you update them yourself with `yay -Sua`.
 
-With `"unattended_aur": true`:
+With `"unattended_aur": true` and `yay`:
 
 - `yay -Sua --noconfirm --answerclean None --answerdiff None --answeredit None`
   builds the packages. Nobody reads the `PKGBUILD` or the diff before it runs,
-  and a build script runs as your user. With `paru` the flags are
-  `--noconfirm --skipreview`.
+  and a build script runs as your user.
 - Before building, the names of all your foreign packages (`pacman -Qqm`) are
   sent to `https://aur.archlinux.org/rpc/v5/info`. Packages whose AUR entry
-  changed within `aur_min_age_days` (default 4) are skipped. This is a
-  cool-down, not a check of the package.
-- Installing a build without a password needs the sudoers rules printed by
-  `arch-update auto --sudoers --aur`. They are written for `yay` only.
+  changed within `aur_min_age_days` (default 7) are skipped. So are VCS
+  packages (`-git` and the like), orphans, and packages whose maintainer changed
+  since you last had them up to date; those wait for you. This is a cool-down,
+  not a check of what the package does.
+- yay does not get root. Where it would run `sudo pacman -U`, it runs
+  `arch-update aur-handoff`, which puts the built files in
+  `~/.cache/arch-updater/aur-stage` and runs a root shim with no arguments. The
+  shim copies the files into a folder only root can write and installs only an
+  update of a foreign package you already have, with no install script, no
+  setuid file, no file capability, and every file where nothing running as root
+  reads it (`/opt`, `/usr/bin`, desktop files, icons, documentation, its own
+  folder under `/usr/lib` or `/usr/share`). Anything else is refused and waits
+  for you. A package that ships a system service, a dkms module or files in
+  `/etc` is never installed this way.
+- Install the shim and its sudoers rule (`arch-update auto --sudoers --aur`)
+  as in [START-HERE.md](START-HERE.md). The rule names the shim with `""`: no
+  argument, so nothing in it comes from your account.
 
-Warning: those four rules end in a sudoers `*`. They are not limited to one
-package: they allow `pacman -U` on files in the user's `yay` cache and
-`pacman -D` and `pacman -S` on any package name. Any process running as the
-user can then install an arbitrary package as root.
+The shim cannot tell whether the package is what the `PKGBUILD` meant: the
+build ran as you. What it closes is the way from your account to root through
+an AUR install.
 
 ## Other commands
 

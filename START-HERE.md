@@ -88,6 +88,18 @@ the rules; this stops if `visudo` finds an error:
 sh -c 'f=$(mktemp) && arch-update auto --sudoers > "$f" && visudo -cf "$f" && sudo install -m 0440 "$f" /etc/sudoers.d/zzz-arch-update-auto; rm -f "$f"'
 ```
 
+For unattended AUR updates (`"unattended_aur": true`, with `yay`), install the
+root shim first and add `--aur`; the extra rule names the shim with no
+arguments (README, AUR):
+
+```bash
+sudo install -D -o root -g root -m 0755 ~/.local/share/arch-update-deck/arch_updater/aur_root.py /usr/local/libexec/arch-update-aur-install
+sh -c 'f=$(mktemp) && arch-update auto --sudoers --aur > "$f" && visudo -cf "$f" && sudo install -m 0440 "$f" /etc/sudoers.d/zzz-arch-update-auto; rm -f "$f"'
+```
+
+After an update of the tool, an unattended AUR run refuses until the shim is
+reinstalled (the first line), and says so.
+
 Keep the file name: sudo applies the last matching rule, so this file must sort
 after the rule that grants all commands with a password. Check with
 `sudo -n true && echo passwordless-root-works`; if it asks for a password the
@@ -116,9 +128,10 @@ loginctl enable-linger "$USER"
 systemctl --user list-timers arch-update-auto.timer
 ```
 
-Installs a systemd user timer: Saturday 12:00, up to 30 minutes of random
-delay, `Persistent=true` (a missed run starts when your user manager next
-starts). Lingering keeps that manager running while you are logged out.
+Installs a systemd user timer: it fires 3 minutes after you log in and then once
+a day while the session lasts, and the update (or its question) happens only when
+the last visit is 3 days old; otherwise systemd skips the run quietly.
+Lingering is not needed: the point is to ask you when you are at the machine.
 
 To be asked first, add `"ask": true` to the configuration. The timer then opens
 a terminal with the same screen: `y` updates, anything else does nothing, no

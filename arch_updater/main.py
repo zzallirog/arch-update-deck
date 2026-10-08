@@ -9,11 +9,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__, auto, day
+from . import __version__, aur_handoff, auto, day
 from .auto import init_config, run_auto, status, sudoers_rules
 from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
-from .scheduler import AUTO_UNIT, PATROL_UNIT, auto_status, remove_timer, install_daily_patrol_timer, install_weekly_auto_timer, last_patrol_report, run_patrol, scheduler_status
+from .scheduler import AUTO_UNIT, is_due, PATROL_UNIT, auto_status, remove_timer, install_daily_patrol_timer, install_weekly_auto_timer, last_patrol_report, run_patrol, scheduler_status
 from .share_report import sanitize_patrol_report
 from .textsafe import clean
 from .transcripts import write_session_report
@@ -111,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto_parser.add_argument("--init", action="store_true", help="Write the starter config if there is none")
     auto_parser.add_argument("--ask", action="store_true", help="Open Update Day and ask even when nothing is waiting")
     auto_parser.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
+    auto_parser.add_argument("--due", action="store_true", help=argparse.SUPPRESS)  # the timer's ExecCondition: exit 0 only when the last visit is 3 days old
     auto_parser.add_argument("--record", action="store_true", help=argparse.SUPPRESS)  # the weekly window: its answer goes to ask-result.json
     auto_parser.add_argument("--sudoers", action="store_true", help="Print the sudoers rules an unattended run needs")
     auto_parser.add_argument("--aur", action="store_true", help="With --sudoers: add the rules unattended AUR needs (a path to root for this account)")
@@ -131,6 +132,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["aur-handoff"]:  # what yay runs instead of sudo; not a command for people, so not in --help
+        config = load_json(auto.CONFIG_PATH) if auto.CONFIG_PATH.is_file() else None
+        return aur_handoff.handoff(argv[1:], auto.aur_min_age(config))
     args = build_parser().parse_args(argv)
     command = args.command
     try:
@@ -185,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.status or args.init:
                 print(status() if args.status else init_config(), end="")
                 return 0
+            if args.due:
+                return 0 if is_due() else 1
             if args.ask or args.scheduled:
                 return day.ask(always=True, record=args.record) if args.ask else day.scheduled()
             if args.sudoers:
