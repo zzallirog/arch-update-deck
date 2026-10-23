@@ -96,8 +96,12 @@ set, nothing changes unless the Wi-Fi is on one of your own access points, known
 by hardware address, not by name. With `"ask": true` the timer opens the screen
 above and waits for your `y`.
 
-It never reboots, never merges a `.pacnew`, never removes the pacman lock, and
-never stores your password. [REFERENCE](docs/REFERENCE.md#safety-statements-in-detail)
+It never reboots, never restarts a service, never merges a `.pacnew`, never
+removes the pacman lock, and never stores your password. After an update it
+names the services that still run replaced libraries, and `arch-update
+rollback` shows how to put the old versions back from the package cache.
+The one file it deletes by itself is a `.pacnew` identical to the file it sits
+beside, through a helper you install. [REFERENCE](docs/REFERENCE.md#safety-statements-in-detail)
 spells each of those out.
 
 ## Requirements

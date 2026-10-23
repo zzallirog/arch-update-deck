@@ -255,36 +255,6 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
 
 ### Changed in 0.20.04
 
-- A package that `IgnorePkg` or `IgnoreGroup` in `pacman.conf` kept at its old
-  version is named after the repository update, under `held` as `ignored`
-  (`name old -> new`): the update was partial. A transaction that would remove
-  a `HoldPkg` package fails as the new case `HOLDPKG-IN-TARGETS`. See
-  [Sequence of the update](#sequence-of-the-update).
-- A test sends SIGINT and SIGTERM from outside to a real `arch-update auto`
-  process with a real tree of processes under it (see [Testing](#testing)).
-- A password or token in a URL (`https://user:pass@host`, a token given as the
-  user, `?token=`, `access_token`, `key`, `sig`, `X-Amz-Signature` and the like)
-  is replaced by `<redacted>` in the report, the notice, briefs, the cases
-  recorded in `census.json` and `census --share`. The raw `run.log` keeps the
-  output as it was. See [Files](#files).
-- The commands whose output is matched against the catalogue and the listings
-  run with `LC_ALL=C`, so a machine in another language still has its
-  failures recognised (see [Environment variables](#environment-variables)).
-- New: `arch-update rollback`. The record an update writes first is compared
-  with the machine now, and the old versions are put back from the package
-  cache with `sudo pacman -U`, after a yes at a terminal. See
-  [Rollback](#rollback).
-- Before an unattended AUR build, each waiting package's `PKGBUILD`, `.install`
-  and local source files are read for red flags (network tools, privileges,
-  `eval` and base64 decoding, command substitution at the top, invisible or
-  non-ASCII characters in names, binary sources); a flag holds the package for
-  you under `aur_by_hand`, with the file, line and reason. See
-  [AUR in detail](#aur-in-detail).
-- A `.pacnew` identical to its live file is deleted after the update, through
-  a new shim (`arch-update-pacnew-prune`, no arguments, its own sudoers rule):
-  the only file the tool deletes on its own, each one in the report. A
-  `.pacnew` with no live file is a warning; the others are listed as before.
-  See [.pacnew files](#pacnew-files).
 - After a run that changed repository or AUR packages, the processes that still
   run a library or program the update replaced are listed: the system and user
   services to restart (with the `systemctl` command, which you run), the other
@@ -297,6 +267,36 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   read-only one stops the run as `READ-ONLY-FILESYSTEM`, and one that trimming
   the cache cannot help as the new `MOUNT-SPACE-LOW`. The 6 GiB floor on `/`
   stays. See [Free space](#free-space).
+- A `.pacnew` identical to its live file is deleted after the update, through
+  a new shim (`arch-update-pacnew-prune`, no arguments, its own sudoers rule):
+  the only file the tool deletes on its own, each one in the report. A
+  `.pacnew` with no live file is a warning; the others are listed as before.
+  See [.pacnew files](#pacnew-files).
+- Before an unattended AUR build, each waiting package's `PKGBUILD`, `.install`
+  and local source files are read for red flags (network tools, privileges,
+  `eval` and base64 decoding, command substitution at the top, invisible or
+  non-ASCII characters in names, binary sources); a flag holds the package for
+  you under `aur_by_hand`, with the file, line and reason. See
+  [AUR in detail](#aur-in-detail).
+- New: `arch-update rollback`. The record an update writes first is compared
+  with the machine now, and the old versions are put back from the package
+  cache with `sudo pacman -U`, after a yes at a terminal. See
+  [Rollback](#rollback).
+- The commands whose output is matched against the catalogue and the listings
+  run with `LC_ALL=C`, so a machine in another language still has its
+  failures recognised (see [Environment variables](#environment-variables)).
+- A package that `IgnorePkg` or `IgnoreGroup` in `pacman.conf` kept at its old
+  version is named after the repository update, under `held` as `ignored`
+  (`name old -> new`): the update was partial. A transaction that would remove
+  a `HoldPkg` package fails as the new case `HOLDPKG-IN-TARGETS`. See
+  [Sequence of the update](#sequence-of-the-update).
+- A password or token in a URL (`https://user:pass@host`, a token given as the
+  user, `?token=`, `access_token`, `key`, `sig`, `X-Amz-Signature` and the like)
+  is replaced by `<redacted>` in the report, the notice, briefs, the cases
+  recorded in `census.json` and `census --share`. The raw `run.log` keeps the
+  output as it was. See [Files](#files).
+- A test sends SIGINT and SIGTERM from outside to a real `arch-update auto`
+  process with a real tree of processes under it (see [Testing](#testing)).
 
 ### Changed in 0.20.03
 
