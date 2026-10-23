@@ -436,7 +436,7 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
         body += f" · fixed by itself: {count} failure{'s' if count > 1 else ''} it learned here"
     if report["held"]:
         body += f" · held: {', '.join(report['held'])}"
-    body += restart_note(report.get("restart"))
+    body += restarts.note(report.get("restart"))
     if report.get("pacnew_removed"):
         body += f" · removed {len(report['pacnew_removed'])} .pacnew identical to the live file"
     if report.get("offers"):
@@ -458,30 +458,6 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
     # The wait for that click lives in its own unit: this run does not stay alive for it.
     unit =["systemd-run", "--user", "--collect", "--quiet", f"--setenv=FIX={fix}", f"--setenv=OPEN={' '.join(terminal)}"]
     sh.capture([*unit, "--", "sh", "-c", CLICK_SCRIPT, "sh", *notice[:2], "--wait", f"--action=default={fix}", *notice[2:]], timeout=10)
-
-
-def pacnew_lines(report: dict[str, Any]) -> list[str]:
-    """What happened to each .pacnew and what a person does with the rest, one entry each, for `auto --status`."""
-    kinds = report.get("pacnew_states") or {}
-    lines = [f"pacnew removed (identical to the live file): {path}" for path in report.get("pacnew_removed") or []]
-    for path in report.get("pacnew") or []:
-        kind = kinds.get(path, "different")
-        if kind == "identical":
-            lines.append(f"pacnew identical to the live file, left: {path} ({report.get('pacnew_not_pruned') or 'not pruned'})\n  fix: sudo rm {path}")
-        elif kind == "original_missing":
-            lines.append(f"pacnew with no live file beside it, look before anything: {path}\n  fix: sudo pacdiff")
-        else:
-            lines.append(f"pacnew: {path}\n  fix: sudo pacdiff")
-    return lines
-
-
-def restart_note(found: dict[str, Any] | None) -> str:
-    """The notice's words for what still runs replaced code: what to restart, and a reboot when only that helps."""
-    if not found:
-        return ""
-    names = [*found.get("system", []), *found.get("user", []), *found.get("programs", [])]
-    said = f" · restart: {', '.join(names)}" if names else ""
-    return said + (f" · reboot needed: {'; '.join(found.get('why') or [])}" if found.get("reboot") else "")
 
 
 def _new_run_dir(run_id: str) -> tuple[str, Path]:
@@ -716,7 +692,7 @@ def status() -> str:
         for item in report["trouble"]
     ]
     lines += [f"  held {name}: {why if isinstance(why, str) else ', '.join(why)}" for name, why in report["held"].items()]
-    lines += ["  " + line.replace("\n", "\n  ") for line in pacnew_lines(report)]
+    lines += ["  " + line.replace("\n", "\n  ") for line in pacnew.status_lines(report)]
     if report["reboot_required"]:
         lines.append("  reboot pending\n    fix: systemctl reboot")
     found = report.get("restart") or {}

@@ -117,3 +117,12 @@ def commands(found: dict[str, Any]) -> list[str]:
     if found.get("user"):
         said.append("systemctl --user restart " + " ".join(found["user"]))
     return said
+
+
+def note(found: dict[str, Any] | None) -> str:
+    """The notice's words for what still runs replaced code: what to restart, and a reboot when only that helps."""
+    if not found:
+        return ""
+    names = [*found.get("system", []), *found.get("user", []), *found.get("programs", [])]
+    said = f" · restart: {', '.join(names)}" if names else ""
+    return said + (f" · reboot needed: {'; '.join(found.get('why') or [])}" if found.get("reboot") else "")

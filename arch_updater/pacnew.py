@@ -80,3 +80,18 @@ def tidy(world: World, act: bool = True) -> dict[str, Any]:
             why = f"{SHIM} exited {result.returncode}"
     world.pacnew = [path for path in world.pacnew if path not in removed]
     return {"removed": removed, "states": {path: kind for path, kind in found.items() if path not in removed}, "not_pruned": why}
+
+
+def status_lines(report: dict[str, Any]) -> list[str]:
+    """What happened to each .pacnew and what a person does with the rest, one entry each, for `auto --status`."""
+    kinds = report.get("pacnew_states") or {}
+    lines = [f"pacnew removed (identical to the live file): {path}" for path in report.get("pacnew_removed") or []]
+    for path in report.get("pacnew") or []:
+        kind = kinds.get(path, "different")
+        if kind == "identical":
+            lines.append(f"pacnew identical to the live file, left: {path} ({report.get('pacnew_not_pruned') or 'not pruned'})\n  fix: sudo rm {path}")
+        elif kind == "original_missing":
+            lines.append(f"pacnew with no live file beside it, look before anything: {path}\n  fix: sudo pacdiff")
+        else:
+            lines.append(f"pacnew: {path}\n  fix: sudo pacdiff")
+    return lines
