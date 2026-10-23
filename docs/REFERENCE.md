@@ -255,6 +255,9 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
 
 ### Changed in 0.20.04
 
+- The commands whose output is matched against the catalogue and the listings
+  run with `LC_ALL=C`, so a machine in another language still has its
+  failures recognised (see [Environment variables](#environment-variables)).
 - New: `arch-update rollback`. The record an update writes first is compared
   with the machine now, and the old versions are put back from the package
   cache with `sudo pacman -U`, after a yes at a terminal. See
@@ -1389,6 +1392,7 @@ GRUB backup only after checking that you do not need it.
 | `ARCH_UPDATE_HOLD` | Set by the `.desktop` entry. Update Day then waits for Enter before it closes when a visit ends without an update. |
 | `DISPLAY`, `WAYLAND_DISPLAY` | Read by the timer's ask run: if neither is set, it does not open a window (status 20). |
 | `PYTHONPATH` | The launcher puts the installation directory in front of it. |
+| `LC_ALL` | Set to `C` for the programs whose output the tool reads with English patterns (`engine.C_LOCALE`: `pacman`, `pacman-conf`, `vercmp`, `checkupdates`, `pacdiff`, `paccache`, `yay`, `paru`, `flatpak`, `snap`, `dkms`, `mkinitcpio`, `systemctl`, `ldd`, `arch-audit`), also behind `sudo`, `env`, `nice` or `ionice`; sudo passes it on by its default `env_keep` (`LC_*`). Your `conditions`, `smoke` commands, dotfiles installers and learned fixes keep your language. The AUR shim, run by sudo, is not changed by this. |
 
 ## Dry run output
 

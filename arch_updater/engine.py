@@ -46,10 +46,32 @@ def load_json(path: Path) -> dict[str, Any]:
         return json.load(handle)
 
 
+# Programs whose output is read with English patterns (the catalogue, the listings, "not found"). They run with
+# LC_ALL=C, so a machine in another language gives the same words. Through `sudo` the variable reaches the program
+# by sudo's own default env_keep (LC_*); a sudoers that drops it leaves that program in its own language.
+C_LOCALE = frozenset({
+    "pacman", "pacman-conf", "vercmp", "checkupdates", "pacdiff", "paccache", "yay", "paru", "flatpak", "snap",
+    "dkms", "mkinitcpio", "systemctl", "ldd", "arch-audit",
+})
+WRAPPERS = frozenset({"sudo", "env", "nice", "ionice"})
+
+
+def environment(argv: Sequence[str]) -> dict[str, str] | None:
+    """The environment a command runs in: this one with LC_ALL=C when its output is parsed (C_LOCALE), else None."""
+    for word in argv:
+        name = Path(word).name
+        if name in C_LOCALE:
+            return {**os.environ, "LC_ALL": "C"}
+        if not (name in WRAPPERS or word.startswith("-") or "=" in word):
+            return None  # the program itself, and not one whose output is read
+    return None
+
+
 def run_capture(argv: Sequence[str], timeout: int = 30) -> CommandResult:
     try:
         completed = subprocess.run(
             list(argv),
+            env=environment(argv),
             text=True,
             errors="replace",
             stdin=subprocess.DEVNULL,

@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .engine import CommandResult, run_capture
+from .engine import CommandResult, environment, run_capture
 
 # Programs that change the package set or the boot files. A signal in the middle of one leaves a
 # half-applied transaction, so they are never given a time limit, whatever the caller asks for.
@@ -114,7 +114,7 @@ class Shell:
                 # Its own session, so a timeout reaches the whole tree. In the person's terminal session (sudo's ticket is
                 # theirs) it stays in the foreground group too: it then gets Ctrl-C from the terminal like any command there.
                 own = {} if self.shared_session else {"start_new_session": True}
-                child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT, **own)
+                child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT, env=environment(argv), **own)
             except FileNotFoundError:
                 returncode = 127
             else:
