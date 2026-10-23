@@ -200,6 +200,8 @@ class World:
                 continue
             self.done.add(store.name)
             self.failed.pop(store.name, None)
+            if store.name == "repo" and (left := stores.ignored(self.sh)):
+                self.held["ignored"] = left  # IgnorePkg / IgnoreGroup: the update was partial, and says so
         wanted = [
             repo for repo in dotfiles.repos(self.config)
             if not (self.dry_run or repo.name in self.done or "keep" in self.failed)

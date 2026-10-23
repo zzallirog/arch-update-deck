@@ -63,6 +63,16 @@
       "origin": "official"
     },
     {
+      "id": "HOLDPKG-IN-TARGETS",
+      "match": "(?i)HoldPkg was found in target list|is designated as a HoldPkg",
+      "stage": "apply",
+      "meaning": "The transaction would remove a package pacman.conf lists under HoldPkg; with --noconfirm pacman answers no and nothing is installed.",
+      "response": "Read which package would go and why (usually a replacement or a conflict), then run the update by hand and answer pacman's question yourself.",
+      "automatic": false,
+      "fix": "grep -h -B2 -A2 \"HoldPkg\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 8",
+      "origin": "official"
+    },
+    {
       "id": "TARGET-NOT-FOUND",
       "match": "(?i)(error: target not found|error: failed to prepare transaction \\(could not find or read package\\))",
       "stage": "repo-update",

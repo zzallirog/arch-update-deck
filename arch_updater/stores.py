@@ -116,3 +116,16 @@ def _newer(sh: Shell, candidate: str, installed: str) -> bool:
         return int(result.output.strip()) > 0
     except ValueError:
         return False
+
+
+def ignored(sh: Shell) -> list[str]:
+    """Updates pacman left out because pacman.conf says IgnorePkg or IgnoreGroup: a partial update, named.
+
+    Read right after `pacman -Syu`, when the sync databases are fresh: `pacman -Qu`
+    marks each such package `[ignored]`. HoldPkg does not hold an update back; it
+    only guards a removal, and a run that meets it fails as HOLDPKG-IN-TARGETS.
+    """
+    result = sh.capture(["pacman", "-Qu"], timeout=60)
+    if result.returncode not in (0, 1):  # 1: nothing to upgrade
+        return []
+    return [line.removesuffix("[ignored]").strip() for line in result.output.splitlines() if line.rstrip().endswith("[ignored]")]

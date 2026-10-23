@@ -400,6 +400,8 @@ def summary(report: dict[str, Any], changes: list[Row] = ()) -> tuple[str, list[
         lines.append(f"{ink(GREY, 'AUR waits for you; by hand: ')}{ink(WHITE, auto.AUR_BY_HAND)}")
     if held.get("aur_too_fresh"):
         lines.append(ink(GREY, f"changed in AUR too recently, held this week: {', '.join(held['aur_too_fresh'])}"))
+    for line in held.get("ignored") or []:  # "name old -> new", from pacman -Qu
+        lines.append(f"{ink(GREY, 'held by IgnorePkg or IgnoreGroup in pacman.conf, a partial update: ')}{ink(WHITE, clean(line))}")
     for line in held.get("aur_by_hand") or []:  # "name: reason", built from the AUR's answer
         lines.append(f"{ink(GREY, 'AUR by hand, ')}{ink(WHITE, clean(line))}")
     lines += [f"{ink(GREY, 'removed, identical to the live file: ')}{ink(WHITE, clean(path))}" for path in report.get("pacnew_removed") or []]

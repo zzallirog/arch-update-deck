@@ -255,6 +255,11 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
 
 ### Changed in 0.20.04
 
+- A package that `IgnorePkg` or `IgnoreGroup` in `pacman.conf` kept at its old
+  version is named after the repository update, under `held` as `ignored`
+  (`name old -> new`): the update was partial. A transaction that would remove
+  a `HoldPkg` package fails as the new case `HOLDPKG-IN-TARGETS`. See
+  [Sequence of the update](#sequence-of-the-update).
 - The commands whose output is matched against the catalogue and the listings
   run with `LC_ALL=C`, so a machine in another language still has its
   failures recognised (see [Environment variables](#environment-variables)).
@@ -762,7 +767,15 @@ once on `y`; the timer's `auto` cannot, and exits 70.
    `foreign.txt` and `etc.tar.zst` (see `keep`). If the record cannot be
    written, nothing is updated (exit 50). A store counts as having changed
    something if its package listing differs afterwards; the count is of package
-   names, so one upgrade is 1.
+   names, so one upgrade is 1. After a repository update that succeeded,
+   `pacman -Qu` (with the sync databases just refreshed) names the packages it
+   marks `[ignored]`, those `IgnorePkg` or `IgnoreGroup` in `pacman.conf` kept
+   back; they go under `held` as `ignored` (`name old -> new`), which the
+   notification (`held: ignored`), `auto --status` and Update Day (`held by
+   IgnorePkg or IgnoreGroup in pacman.conf, a partial update: ...`) show. It
+   changes no exit status. `HoldPkg` holds nothing back; it guards removals,
+   and a run whose transaction would remove such a package fails as
+   `HOLDPKG-IN-TARGETS` (pacman answers its question no under `--noconfirm`).
 3. **Repair.** If a store failed, its failure is looked up in the catalogue of
    known failures. If a repair is recorded for it, the repair runs and the
    sequence returns to step 1. After the checks pass, a store that failed with
@@ -792,7 +805,7 @@ The sequence is the program in `arch_updater/control.tis`, executed by
 
 `arch_updater/data/failure-modes.json` is the shipped catalogue (installed under
 `~/.local/share/arch-update-deck/arch_updater/data/`). An entry has an `id`, a
-`meaning`, a `fix`, optionally a `repair`, and for twenty-six of the forty a
+`meaning`, a `fix`, optionally a `repair`, and for twenty-seven of the forty-one a
 `match` (a regular expression searched in the failing command's output); the
 other fourteen have none and are raised by the checks. The `fix` is one command to run by
 hand, on one line, readable by `sh`, with no placeholder. It is never the command
@@ -832,6 +845,7 @@ The shipped cases (`arch-update vault` prints them with their `meaning`):
 | `PACKAGE-ARCHIVE-CORRUPT` | - | `grep -h "corrupted" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 3` |
 | `POST-TRANSACTION-HOOK-FAILED` | - | `grep -B4 "command failed to execute correctly" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 12` |
 | `UNSATISFIED-DEPENDENCIES` | - | `grep -hE "breaks dependency\|unable to satisfy\|could not satisfy" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 5` |
+| `HOLDPKG-IN-TARGETS` | - | `grep -h -B2 -A2 "HoldPkg" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 8` |
 | `TARGET-NOT-FOUND` | - | `grep -h "target not found" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 3` |
 | `READ-ONLY-FILESYSTEM` | - | `findmnt -O ro -t ext4,btrfs,xfs,f2fs; dmesg \| tail -n 20` |
 | `MOUNT-SPACE-LOW` | - | `df -h / /usr /boot /var/cache/pacman/pkg` |
