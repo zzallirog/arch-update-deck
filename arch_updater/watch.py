@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import exits, home, news, repairs
-from .engine import SOFT_FREE_BYTES, STATE_ROOT, attest, snapshot
+from . import exits, home, news, repairs, space
+from .engine import STATE_ROOT, attest, snapshot
 from .shell import Shell
 
 
@@ -117,10 +117,12 @@ def probe_lock(scene: Scene) -> Reading:
 
 
 def probe_disk(scene: Scene) -> Reading:
-    free = scene.sh.free_bytes("/")
-    if free < SOFT_FREE_BYTES:
-        return Reading([Verdict("disk", "fail", "ROOT-SPACE-LOW", f"{free / 1024**3:.1f} GiB free on /")])
-    return passed("disk")
+    """Room for this update on every filesystem it writes to, and none of them read-only (space.py)."""
+    plan = space.plan(scene.sh)
+    found = space.shortfalls(scene.sh, plan)
+    if found:
+        return Reading([Verdict("disk", "fail", case, detail) for case, detail in found])
+    return passed("disk", "" if plan.read else f"the update's size was not read ({plan.note}): only the floor on / was checked")
 
 
 def probe_dns(scene: Scene) -> Reading:

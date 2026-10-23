@@ -6,7 +6,7 @@
       "match": "(?i)(not enough free disk space|no space left on device|partition .* too full)",
       "stage": "preflight",
       "meaning": "The transaction cannot retain both old and new package archives.",
-      "response": "Below 6 GiB free on / the look fails with this case. The repair runs sudo paccache -rk2 (keeps the two newest cached versions of each package), then the machine is looked at again; up to three such rounds per run. If / is still below 6 GiB, the run stops before any update, with the fix below. The same limit and the same cleanup apply to the update from the screen and to the unattended run.",
+      "response": "Below 6 GiB free on /, or less room on the filesystem that holds / or the pacman cache than this update needs there (what it downloads, plus what its new versions add over the old ones, plus 0.5 GiB spare), the look fails with this case. The repair runs sudo paccache -rk2 (keeps the two newest cached versions of each package), then the machine is looked at again; up to three such rounds per run. If there is still too little room, the run stops before any update, with the fix below. The same check and the same cleanup apply to the update from the screen and to the unattended run.",
       "automatic": true,
       "repair": "trim-cache",
       "fix": "sudo paccache -rk2 && df -h /",
@@ -80,6 +80,17 @@
       "response": "Stop. Do not remount it read-write to push the update through: a disk that went read-only after an error needs its logs read first.",
       "automatic": false,
       "fix": "findmnt -O ro -t ext4,btrfs,xfs,f2fs; dmesg | tail -n 20",
+      "origin": "official"
+    },
+    {
+      "id": "MOUNT-SPACE-LOW",
+      "match": "",
+      "classify_output": false,
+      "stage": "preflight",
+      "meaning": "A filesystem other than the one that holds / and the package cache has less room than this update writes to it: /boot for a kernel's image and initramfs, or a separate /usr.",
+      "response": "Nothing is updated. Trimming the package cache would not help this filesystem, so no repair runs: make room on it (old kernels' files in /boot, for example) and run again.",
+      "automatic": false,
+      "fix": "df -h / /usr /boot /var/cache/pacman/pkg",
       "origin": "official"
     },
     {

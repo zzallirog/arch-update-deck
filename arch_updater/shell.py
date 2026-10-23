@@ -169,6 +169,16 @@ class Shell:
     def free_bytes(self, path: str) -> int:
         return shutil.disk_usage(path).free
 
+    def total_bytes(self, path: str) -> int:
+        return shutil.disk_usage(path).total
+
+    def device(self, path: str) -> int:
+        """The filesystem a path is on: two paths with one number share their free space."""
+        return os.stat(path).st_dev
+
+    def read_only(self, path: str) -> bool:
+        return bool(os.statvfs(path).f_flag & os.ST_RDONLY)
+
     def resolves(self, host: str = "archlinux.org") -> bool:
         try:
             socket.getaddrinfo(host, 443)

@@ -187,7 +187,7 @@ def test_the_low_space_case_describes_the_limit_and_the_cleanup_the_code_has(tmp
 
 def test_every_case_a_probe_can_name_is_in_the_census(tmp_path) -> None:
     known = {case.id for case in census.load(tmp_path)}
-    source = (watch.__file__, auto.__file__)
+    source = (watch.__file__, auto.__file__, __import__("arch_updater.space").space.__file__)
     named = {word for path in source for word in __import__("re").findall(r'"([A-Z][A-Z-]+[A-Z])"', open(path).read())}
     assert named - {"WATCH", "APPLY", "CENSUS", "OUT", "DRY_RUN", "LOCAL-"} <= known
 

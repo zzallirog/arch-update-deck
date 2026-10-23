@@ -13,7 +13,7 @@ By what each program is used for.
 | Updating | `sudo` (package `sudo`; not part of a base install) | No root: the update stops with exit 70. |
 | Weekly timer without asking | `visudo` (package `sudo`) | The sudoers rule cannot be checked before it is installed. |
 | Updating | `tar` with `zstd` | The record of `/etc` cannot be written, so the update does not start (exit 50). |
-| Update Day, patrol, `status` | `checkupdates` (package `pacman-contrib`; it also needs `fakeroot`) | The repository queue is shown as unread (`cannot read the repositories: install pacman-contrib`; in `status`, `?`). Update Day then asks no question, because `y` would update blind; `arch-update auto` still runs. |
+| Update Day, patrol, `status`, the disk check's sizes | `checkupdates` (package `pacman-contrib`; it also needs `fakeroot`) | The repository queue is shown as unread (`cannot read the repositories: install pacman-contrib`; in `status`, `?`), and the disk check only checks the 6 GiB on `/`. Update Day then asks no question, because `y` would update blind; `arch-update auto` still runs. |
 | Low-space repair | `paccache` (`pacman-contrib`) | No cleanup. The sudoers rule for it is not generated. |
 | `.pacnew` listing | `pacdiff` (`pacman-contrib`) | No `.pacnew` files are listed. |
 | Timers | `systemd --user`, `systemctl` | `schedule` cannot install the timers. |
@@ -255,6 +255,12 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   programs to close and start again, and `reboot needed` when the system
   manager or the message bus is among them. Nothing is restarted. See
   [Restarts after an update](#restarts-after-an-update).
+- The disk check counts what the waiting update downloads, adds and frees, on
+  each filesystem it writes to (`/`, the pacman cache and database, `/usr`,
+  `/boot` for a kernel), with a spare that shrinks on a small filesystem. A
+  read-only one stops the run as `READ-ONLY-FILESYSTEM`, and one that trimming
+  the cache cannot help as the new `MOUNT-SPACE-LOW`. The 6 GiB floor on `/`
+  stays. See [Free space](#free-space).
 
 ### Changed in 0.20.03
 
@@ -409,16 +415,48 @@ in the profile file. `arch-update` with no command opens Update Day instead.
   the `tar` of `/etc` (600 s) do.
 - The generated sudoers rules contain no `*`; with `--aur` the shim's rule takes no arguments.
 
-## Free space on `/`
+## Free space
 
-The disk check fails below 6 GiB free (`SOFT_FREE_BYTES` in
-`arch_updater/engine.py`, `probe_disk` in `arch_updater/watch.py`). The repair
-for it runs `sudo -n paccache -rk2`, which deletes every cached package file
-except the two newest versions of each package, and then checks again. If space
-is still low after three repairs, the run stops before any update and exits 30.
-The same limit and the same cleanup apply to `y` on Update Day and to the
-unattended run. The patrol does not check free space. `ROOT-SPACE-LOW` is also the case for a pacman error such as `No
-space left on device`.
+The disk check (`probe_disk` in `arch_updater/watch.py`, `arch_updater/space.py`)
+looks at every filesystem the update writes to, each once however many of
+these paths share it:
+
+| Path | What lands there | Looked at |
+|---|---|---|
+| `/` | the floor: 6 GiB free (`SOFT_FREE_BYTES` in `arch_updater/engine.py`) whatever the update brings | always |
+| pacman's `DBPath` (`pacman-conf DBPath`, default `/var/lib/pacman`) | the sync databases | always |
+| pacman's `CacheDir` (`pacman-conf CacheDir`, default `/var/cache/pacman/pkg`) | the download size of the waiting packages | always |
+| `/usr` | the installed size of the new versions minus that of the old ones | when that is more than nothing, or it shares a filesystem with the rows above |
+| `/boot` | for a waiting kernel (a package with a preset in `/etc/mkinitcpio.d`): its `vmlinuz`, `initramfs` and fallback image as they are now, since they are written again | when a kernel waits, or it shares a filesystem with the rows above |
+
+The sizes come from the repository queue, read as `checkupdates` reads it but
+into a database copy of this tool's own (`arch-updater/checkup-db` under
+`XDG_CACHE_HOME`, never `/var/lib/pacman` and not the copy Update Day's queue
+uses), then `pacman -Si --dbpath <copy>` for the new versions and `pacman -Qi`
+for the old ones, both with `LC_ALL=C`. What the update frees is credited: a
+package that shrinks lowers the need. On each filesystem that receives
+something, the need is that sum plus a spare of 512 MiB, or 5 % of the
+filesystem when that is less (51 MiB on a /boot of 1 GiB). The filesystem of `/`
+needs the larger of that and 6 GiB. If the queue cannot be read (`checkupdates`
+missing or failing, or pacman not telling a size), no size is guessed: only the
+6 GiB on `/` is checked, and the check's detail says so.
+
+| Finding | Case | Repair |
+|---|---|---|
+| A filesystem above is mounted read-only | `READ-ONLY-FILESYSTEM` | none: the run stops (30) with the `fix`, which reads `findmnt` and `dmesg` |
+| Too little room on the filesystem of `/` or of the pacman cache | `ROOT-SPACE-LOW` | `trim-cache` |
+| Too little room on another one (`/boot`, a separate `/usr`) | `MOUNT-SPACE-LOW` | none: trimming the cache would not help it |
+
+The detail names the filesystem, its free space and the need, for example
+`300 MiB free on /boot, this update needs 567 MiB (55 MiB of kernel boot files, 512 MiB spare)`;
+below the floor with nothing larger needed it stays `5.9 GiB free on /`. The
+repair `trim-cache` runs `sudo -n paccache -rk2`, which deletes every cached
+package file except the two newest versions of each package, and then checks
+again. If space is still low after three repairs, the run stops before any
+update and exits 30. The same check and the same cleanup apply to `y` on Update
+Day and to the unattended run. The patrol does not check free space.
+`ROOT-SPACE-LOW` is also the case for a pacman error such as `No space left on
+device`.
 
 ## Restarts after an update
 
@@ -568,7 +606,7 @@ once on `y`; the timer's `auto` cannot, and exits 70.
    | conditions | `config`, or the name you gave | no configuration file (70); a configured command exits non-zero (its `exit`, default 20) | 70, 20, 40, 50 |
    | record directory | `backup record` | `keep` is set and the nearest existing folder on its path is not writable or is on the same device as `/` | 50 |
    | pacman lock | `pacman is busy` | `/var/lib/pacman/db.lck` exists | 30 |
-   | disk space | `disk space` | less than 6 GiB free on `/` | 30 |
+   | disk space | `disk space` | less than 6 GiB free on `/`, less room than the waiting update needs on a filesystem it writes to, or one of those mounted read-only (see [Free space](#free-space)) | 30 |
    | name resolution | `network` | `archlinux.org` does not resolve | 30 |
    | Arch news | `news` | a post in the Arch news feed asks for a manual step ("manual intervention", "action required", "before upgrading") and `arch-update news --ack` has not marked it read; a feed that cannot be fetched or read passes | 20 |
    | package database | `package database` | `pacman -Dk` exits non-zero | 20 |
@@ -615,9 +653,9 @@ The sequence is the program in `arch_updater/control.tis`, executed by
 
 `arch_updater/data/failure-modes.json` is the shipped catalogue (installed under
 `~/.local/share/arch-update-deck/arch_updater/data/`). An entry has an `id`, a
-`meaning`, a `fix`, optionally a `repair`, and for twenty-six of the thirty-nine a
+`meaning`, a `fix`, optionally a `repair`, and for twenty-six of the forty a
 `match` (a regular expression searched in the failing command's output); the
-other thirteen have none and are raised by the checks. The `fix` is one command to run by
+other fourteen have none and are raised by the checks. The `fix` is one command to run by
 hand, on one line, readable by `sh`, with no placeholder. It is never the command
 that just failed: no `fix` is `pacman -Syu`, `yay -Sua`, `paru -Sua`,
 `flatpak update`, `snap refresh` or `arch-update auto` (with or without `sudo`),
@@ -657,6 +695,7 @@ The shipped cases (`arch-update vault` prints them with their `meaning`):
 | `UNSATISFIED-DEPENDENCIES` | - | `grep -hE "breaks dependency\|unable to satisfy\|could not satisfy" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 5` |
 | `TARGET-NOT-FOUND` | - | `grep -h "target not found" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 3` |
 | `READ-ONLY-FILESYSTEM` | - | `findmnt -O ro -t ext4,btrfs,xfs,f2fs; dmesg \| tail -n 20` |
+| `MOUNT-SPACE-LOW` | - | `df -h / /usr /boot /var/cache/pacman/pkg` |
 | `MIRROR-STALE-404` | `wait-for-mirror` | `sudo pacman -Syyu` |
 | `AUR-CACHE-UPSTREAM-MISSING` | - | `less +G "$(ls -td ~/.local/state/arch-updater/runs/*/ \| head -n 1)run.log"` |
 | `AUR-CACHE-PKGBUILD-MISSING` | `quarantine-aur-cache` | `grep -h "error downloading sources" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 1` |
@@ -1174,6 +1213,7 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `drift/<repository>.md` | The drift report of each dotfiles repository, rewritten at every visit and by `dotfiles --drift`. |
 | `dotfiles.json` | When each dotfiles repository was last visited and left nothing broken. |
 | `discover.json` | When each suggestion of `dotfiles --suggest` was last named in the weekly notice. |
+| `~/.cache/arch-updater/checkup-db/` (`XDG_CACHE_HOME`) | The disk check's own copy of the sync databases, refreshed by `checkupdates` at every look; nothing else uses it. |
 | `news-feed.xml` | The last Arch news feed that parsed, kept 30 minutes so one run asks the server once. |
 | `news-seen.json` | The Arch news posts a person has marked read (`arch-update news --ack`), by their feed id. |
 | `aur-maintainers.json` | The maintainer of each foreign package when it was last up to date; a change holds its update for you. |
