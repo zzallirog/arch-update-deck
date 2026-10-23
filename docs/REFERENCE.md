@@ -260,6 +260,8 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   (`name old -> new`): the update was partial. A transaction that would remove
   a `HoldPkg` package fails as the new case `HOLDPKG-IN-TARGETS`. See
   [Sequence of the update](#sequence-of-the-update).
+- A test sends SIGINT and SIGTERM from outside to a real `arch-update auto`
+  process with a real tree of processes under it (see [Testing](#testing)).
 - A password or token in a URL (`https://user:pass@host`, a token given as the
   user, `?token=`, `access_token`, `key`, `sig`, `X-Amz-Signature` and the like)
   is replaced by `<redacted>` in the report, the notice, briefs, the cases
@@ -1453,7 +1455,15 @@ python3 -m pytest -q
 This needs `pytest`. The tests replace every command, the name lookup, the AUR
 request and the sleeps with scripted ones (`tests/test_auto.py`,
 `tests/test_day.py`); the frames of Update Day are compared with the files in
-`tests/fixtures/`. This repository does not record which stores or repairs have
+`tests/fixtures/`. `tests/test_signals_live.py` starts `arch-update auto` as a
+process of its own, in a session of its own, with only a scripted `sudo`,
+`pacman`, `flatpak` and `tar` on its `PATH`, and sends it SIGINT and SIGTERM
+from outside while `pacman -Syu` runs: it checks the exit status (130, 143),
+that Ctrl-C reached the package command through its session and SIGTERM did
+not, that no process of the update is left, that no further store started,
+that stdout is exactly one JSON report, and that the lock is free. The network,
+the machine's health reading and the pacman lock path are the only things
+replaced there. This repository does not record which stores or repairs have
 been run on a real machine. The `snap` store appears in the scripted tests only.
 No test runs the `paru` command line.
 
