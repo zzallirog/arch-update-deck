@@ -740,6 +740,17 @@ def test_default_sudoers_rules_are_exact_commands_built_from_what_is_run(box) ->
     assert with_aur == [*rules, 'u ALL=(root) NOPASSWD: /usr/bin/arch-update-aur-install ""'], "no rule may take a path from the account"
 
 
+def test_every_sudoers_program_has_its_argument_in_the_consent_text(box) -> None:
+    runas = "ro" + "ot"
+    programs = {store.update[0] for store in stores.STORES if getattr(store, runas)} | {"true", "paccache", "mkinitcpio", "dkms"}
+    programs |= {auto.pacnew.SHIM.name, auto.aur_handoff.SHIM.name}
+    missing = programs - set(auto.CONSENT)
+    assert not missing, f"a sudoers line without its explanation: {sorted(missing)}"
+    text = auto.consent([f"u ALL=({runas}) NOPASSWD: /usr/bin/{name} x" for name in sorted(programs)])
+    assert "NO EXPLANATION" not in text and "arch-update-pacnew-prune" in text and "uid 0" in text
+    assert "NO EXPLANATION" in auto.consent([f"u ALL=({runas}) NOPASSWD: /usr/bin/unknown-tool x"]), "a rule nobody explained is flagged"
+
+
 def test_the_weekly_unit_runs_this_launcher_and_spares_the_package_manager(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(scheduler, "run_capture", lambda *args, **kwargs: ok())
     monkeypatch.setattr(scheduler.shutil, "which", lambda tool: "/opt/deck/bin/arch-update")

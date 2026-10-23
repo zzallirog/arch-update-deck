@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__, aur_handoff, auto, briefs, day, discover, news, rollback
-from .auto import init_config, run_auto, status, sudoers_rules
+from .auto import consent, init_config, run_auto, status, sudoers_rules
 from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
 from .shell import Shell
@@ -317,7 +317,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.ask or args.scheduled:
                 return day.ask(always=True, record=args.record) if args.ask else day.scheduled()
             if args.sudoers:
-                print(sudoers_rules(pwd.getpwuid(os.getuid()).pw_name, aur=args.aur), end="")
+                rules = sudoers_rules(pwd.getpwuid(os.getuid()).pw_name, aur=args.aur)
+                print(rules, end="")
+                print(consent([line for line in rules.splitlines() if not line.startswith("#")]), file=sys.stderr, end="")
                 return 0
             report = run_auto(dry_run=args.dry_run)
             _json(report)

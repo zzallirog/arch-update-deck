@@ -141,7 +141,7 @@ configuration and says so under `PENDING`. That is the whole first update.
 | State: runs, briefs, census, the pre-update record | `~/.local/state/arch-updater/` |
 | The sudoers rules, once you install them | `/etc/sudoers.d/zzz-arch-update-auto` |
 
-Version 0.20.04. Written for one machine first; expect rough edges, and send
+Version 0.20.05. Written for one machine first; expect rough edges, and send
 them in. [docs/REFERENCE.md](docs/REFERENCE.md) has every command, key, exit
 status, configuration key and file.
 

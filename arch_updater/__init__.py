@@ -1,3 +1,3 @@
 """Arch Update Deck."""
 
-__version__ = "0.20.04"
+__version__ = "0.20.05"

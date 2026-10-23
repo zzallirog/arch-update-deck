@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.04. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.05. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -252,6 +252,15 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.05
+
+- `arch-update auto --sudoers` prints, on stderr beside the rules on stdout, what
+  each line lets your account do without a password and why that is safe: one
+  exact command per line, no argument from the account, no shell, the two
+  helpers owned by uid 0 and checked against this release, and how to take the
+  access back. A rule with no explanation in the text is flagged
+  `NO EXPLANATION - do not install this line`, and a test fails until it has one.
 
 ### Changed in 0.20.04
 

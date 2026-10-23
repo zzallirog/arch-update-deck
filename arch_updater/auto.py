@@ -408,6 +408,42 @@ def sudoers_rules(user: str, aur: bool = False, sh: Shell | None = None) -> str:
     return "\n".join([*header, *dict.fromkeys(skipped), *rules]) + "\n"
 
 
+# What each sudoers line lets this account do without a password, and why that is safe, in the words a person
+# decides on. `arch-update auto --sudoers` prints it beside the rules, so the person and an agent installing them
+# read the same text. A rule with no entry here fails a test: no line gets in without its argument.
+CONSENT = {
+    "true": "tells sudo whether the rules work; it does nothing",
+    "pacman": "runs the full system update, exactly `pacman -Syu --noconfirm`; no package name or option can be added",
+    "paccache": "trims the package cache to two versions, exactly `paccache -rk2`",
+    "mkinitcpio": "rebuilds the boot images, exactly `mkinitcpio -P`",
+    "dkms": "rebuilds kernel modules, exactly `dkms autoinstall`",
+    "snap": "runs `snap refresh`",
+    "arch-update-pacnew-prune": (
+        "deletes a .pacnew file under /etc only if it is byte for byte the live file beside it; it takes no argument, "
+        "follows no link and prints each file it removed"
+    ),
+    "arch-update-aur-install": (
+        "installs the packages yay built, from one fixed folder, only if they pass its checks; it takes no argument, "
+        "and a package that fails them waits for you and your password"
+    ),
+}
+
+
+def consent(rules: list[str]) -> str:
+    """Plain words for the person who is about to allow `rules`: what each does, and what no rule allows."""
+    lines = ["These lines let your account run the commands below as administrator, without a password. Nothing else:"]
+    for rule in rules:
+        command = rule.split("NOPASSWD:", 1)[1].split()[0]
+        lines.append(f"  - {Path(command).name}: {CONSENT.get(Path(command).name, 'NO EXPLANATION - do not install this line')}")
+    lines += [
+        "Every line is one exact command. sudo matches the whole command line, so none of them takes a package name,",
+        "a path or an option from your account, and none opens a shell. The two helpers under /usr/local/libexec must be",
+        "owned by uid 0 and writable by nobody else, and arch-update refuses to run one whose bytes differ from this release.",
+        "You can remove the access at any time by deleting the file; unattended updates then stop and ask.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def _packages_changed(before: str, after: str) -> int:
     """How many packages differ between two listings: a new version of one is one change, not two lines."""
     return len({line.split()[0] for line in set(before.splitlines()) ^ set(after.splitlines()) if line.strip()})
