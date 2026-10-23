@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.03. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.04. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -144,6 +144,10 @@ is written.
    `[exit N]` line the log adds; `AUR waits for you; by hand: yay -Sua`
    if the AUR was held; a line for each package changed in the AUR too recently;
    `new config version: <file>  compare: sudo pacdiff` for each `.pacnew`; and
+   the lines of [Restarts after an update](#restarts-after-an-update)
+   (`restart by hand: ...`, `still running replaced files, close and start
+   again: ...`, `reboot needed: ...`, and a dim `system services not looked
+   into: N processes only uid 0 may read`); and
    the headline `DONE` or `FAILED`, with ` · REBOOT NEEDED` if a kernel was
    replaced. Enter closes. Ctrl-C at this prompt only closes: the update is over
    and is not reported as stopped.
@@ -215,7 +219,7 @@ is caught only by Update Day.
 | `status [--json]` | Prints the OS, update counts (repository from `checkupdates`, AUR from `yay -Qua`, or `paru -Qua` if `yay` is not installed; `?` with a note when unreadable), running kernel and whether its modules are present, bootloader, default kernel package, free space on `/`, pacman lock, GPU, each installed kernel with its boot files and headers, failed units, `.pacnew`/`.pacsave` count and the Hyprland library state. `--json` prints the raw snapshot. |
 | `attest` | Prints as JSON whether kernel, initramfs, DKMS, failed units and the boot loader entry are in order, whether a reboot is pending, and the `.pacnew` inventory. |
 | `kernel [profile] [--dry-run] [--yes]` | Without a profile, prints the detected kernel and the profiles as JSON. With one, asks `Install kernel profile <id> and set it as the GRUB default? [y/N]` (at a terminal; without one, `--yes` is required, otherwise exit 1), then installs the kernel and, with GRUB, selects it. `--dry-run` prints what would change and does not ask. `auto` keeps the detected kernel and asks nothing. |
-| `auto [--dry-run] [--status] [--init] [--ask] [--sudoers [--aur]]` | The update without questions. With no flag it runs and prints the JSON report. `--dry-run`: see [Dry run output](#dry-run-output). `--status`: the problems left by the last run, held stores, `.pacnew` files and a pending reboot, each with its `fix`. `--init`: write the starter configuration; an existing file is not touched. `--ask`: Update Day, asking even when nothing waits. `--sudoers`: print the sudoers rules; `--aur` adds the AUR rules. Flags are examined in the order `--status`/`--init`, `--ask`, `--sudoers`, then the run. Ctrl-C during the run ends it as in [Interrupts](#interrupts) (exit 130). |
+| `auto [--dry-run] [--status] [--init] [--ask] [--sudoers [--aur]]` | The update without questions. With no flag it runs and prints the JSON report. `--dry-run`: see [Dry run output](#dry-run-output). `--status`: the problems left by the last run, held stores, `.pacnew` files, a pending reboot and what to restart, each with its `fix`. `--init`: write the starter configuration; an existing file is not touched. `--ask`: Update Day, asking even when nothing waits. `--sudoers`: print the sudoers rules; `--aur` adds the AUR rules. Flags are examined in the order `--status`/`--init`, `--ask`, `--sudoers`, then the run. Ctrl-C during the run ends it as in [Interrupts](#interrupts) (exit 130). |
 | `schedule [--install-auto] [--install] [--remove-auto] [--remove]` | Without flags, prints the state of both timers as JSON. `--install-auto` and `--install` write the unit files and enable the timer (safe to repeat). `--remove-auto` and `--remove` stop a timer and delete its unit files; removing what is not there succeeds. Exit 1 if systemd refuses. If several flags are given, the first of `--install-auto`, `--install`, `--remove-auto`/`--remove` wins. |
 | `patrol` | Runs the [patrol](#daily-patrol) now and prints its report. |
 | `share-report` | Prints a sanitised summary of the last patrol as JSON (schema `arch-update-share/v1`: health, reboot need, pending counts, CVE count, the names of the issue kinds). It writes nothing and sends nothing. Without a patrol report it exits 1 with `run arch-update patrol first`. |
@@ -242,6 +246,15 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.04
+
+- After a run that changed repository or AUR packages, the processes that still
+  run a library or program the update replaced are listed: the system and user
+  services to restart (with the `systemctl` command, which you run), the other
+  programs to close and start again, and `reboot needed` when the system
+  manager or the message bus is among them. Nothing is restarted. See
+  [Restarts after an update](#restarts-after-an-update).
 
 ### Changed in 0.20.03
 
@@ -353,6 +366,10 @@ in the profile file. `arch-update` with no command opens Update Day instead.
   (`engine.detect_kernel`, `watch.probe_machine`); `auto` then exits 10 and
   Update Day adds `REBOOT NEEDED`. Installing a kernel with `k` or `kernel`
   says `reboot needed to boot into it; this tool does not reboot`.
+- No restart: no code path runs `systemctl restart`, `kill` or the like on a
+  service or a program. The list of what runs replaced code (see
+  [Restarts after an update](#restarts-after-an-update)) is read from `/proc`
+  and printed with the commands for you to run.
 - `.pacnew` and `.pacsave` files are listed with `pacdiff -o`. The result screen
   and `auto --status` print `sudo pacdiff` as the command for you to run. No
   code reads or writes them.
@@ -402,6 +419,43 @@ is still low after three repairs, the run stops before any update and exits 30.
 The same limit and the same cleanup apply to `y` on Update Day and to the
 unattended run. The patrol does not check free space. `ROOT-SPACE-LOW` is also the case for a pacman error such as `No
 space left on device`.
+
+## Restarts after an update
+
+pacman replaces a file by writing the new one and unlinking the old. A process
+that had the old library or program mapped keeps running it, and
+`/proc/<pid>/maps` then names it with ` (deleted)`. After a run in which the
+repository or the AUR store changed something (not after a dry run, not after
+Flatpak or Snap alone), `arch_updater/restarts.py` reads every
+`/proc/<pid>/maps` it may read and keeps the processes that map a deleted file
+under `/usr/` or `/opt/` that is a library (`.so`, `.so.N`) or is mapped
+executable. A deleted file elsewhere (`/tmp`, `/dev/shm`, `memfd:`) or a
+deleted data file is not counted.
+
+Each process is placed by `/proc/<pid>/cgroup`:
+
+| Where the process is | Reported as | What you run |
+|---|---|---|
+| `system.slice/…/<name>.service` | `system` | `sudo systemctl restart <name>.service` |
+| `user@<uid>.service/…/<name>.service` | `user` | `systemctl --user restart <name>.service` |
+| a scope (an application, a login session) or nowhere known | `programs`, by its process name | close it and start it again |
+| PID 1, or a process named `systemd`, `dbus-daemon`, `dbus-broker` or `dbus-broker-launch` | `reboot` `true`, with the reason in `why` | `systemctl reboot` |
+
+The tool runs none of these commands. The kernel lets an account read the maps
+of its own processes only, and the run is not uid 0: PID 1 and the system
+services of other accounts are counted in `unread`, and `complete` is then
+`false`. A scan with something unread never claims that nothing needs a
+restart. PID 1 itself is not read; the user's own `systemd --user` and bus
+are, and they load the same libraries, so a replaced `libsystemd-shared` or
+`libc` shows there.
+
+The result is `restart` in `report.json` (`null` when nothing was looked for):
+`system`, `user`, `programs`, `reboot`, `why`, `unread`, `complete`. It sits
+beside `reboot_required`, which stays the kernel's: a `reboot` here changes
+neither the exit status nor the headline `REBOOT NEEDED`. The notification adds
+`restart: <names>` and `reboot needed: <why>`; `auto --status` prints the
+commands, the programs, the reboot and the count of processes not looked into;
+the result block of Update Day prints the same.
 
 ## AUR in detail
 
@@ -805,7 +859,10 @@ notification, including one started with `y`: the state and the problems, each
 with its `fix`. A run that repaired a failure with a fix learned on this
 machine, and ended well, adds `fixed by itself: N failure(s) it learned here`.
 A skipped run (status 80) sends one too. Urgency is critical
-unless the status is 0, 10, 80 or an interrupt (129, 130, 143).
+unless the status is 0, 10, 80 or an interrupt (129, 130, 143). When the
+update left processes on replaced files, the body adds `restart: <names>`, and
+`reboot needed: <why>` when only a reboot helps (see
+[Restarts after an update](#restarts-after-an-update)).
 
 Clicking the notification opens a terminal on the `fix` of the first problem
 that has one, or on `yay -Sua` if only the AUR was held, or on
@@ -816,8 +873,9 @@ found as described above, `systemd-run`, and a `notify-send` that supports
 `sudo` ask for your password in that terminal.
 
 `arch-update auto --status` prints the problems left by the last run, each with
-its `fix`, plus held stores, `.pacnew` files and a pending reboot. The same
-problems stand under `PENDING` on Update Day.
+its `fix`, plus held stores, `.pacnew` files, a pending reboot, and what to
+restart after the update. The same problems stand under `PENDING` on Update
+Day.
 
 ## Daily patrol
 
@@ -1105,7 +1163,7 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `~/.config/arch-updater/auto.json` | Configuration. |
 | `runs/auto-<time>/run.log` | Output of the commands the update executed through its command wrapper: the store updates, repairs, the `tar` of `/etc`. The probes (`sudo -n true`, `pacman -Dk`, package listings, `checkupdates`) are not logged. |
 | `runs/auto-<time>/tokens.jsonl` | Check results, repairs and control-flow events. |
-| `runs/auto-<time>/report.json` | Result of the run: `run_id`, `started_at`, `finished_at`, `dry_run`, `out`, `exit_code`, `signal` and `child_stopped` (set only when a signal ended the run, otherwise `null`), `state`, `looks`, `crash`, `trouble`, `verdicts`, `updated`, `held`, `offers`, `learned_unshared` (how many learned fixes this run's notice offered to share), `self_fixed` (the learned cases that repaired a failure in this run), `repairs`, `pacnew`, `reboot_required`, `wrote` (the run directory), and a `cve` block with the `arch-audit` findings (they never change the exit status). |
+| `runs/auto-<time>/report.json` | Result of the run: `run_id`, `started_at`, `finished_at`, `dry_run`, `out`, `exit_code`, `signal` and `child_stopped` (set only when a signal ended the run, otherwise `null`), `state`, `looks`, `crash`, `trouble`, `verdicts`, `updated`, `held`, `offers`, `learned_unshared` (how many learned fixes this run's notice offered to share), `self_fixed` (the learned cases that repaired a failure in this run), `repairs`, `pacnew`, `reboot_required`, `restart` (see [Restarts after an update](#restarts-after-an-update)), `wrote` (the run directory), and a `cve` block with the `arch-audit` findings (they never change the exit status). |
 | `runs/kernel-<time>/run.log` | Kernel selection. |
 | `last-auto.json` | `report.json` of the last update that was not a dry run, an interrupted one included. Source of `PENDING` and of the `l` key. A run that stopped at a check has this report but no `run.log`. |
 | `last-patrol.json`, `patrol-history.json` | The last patrol, and a summary of the last 12. |

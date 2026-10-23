@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import aur_handoff, briefs, census, discover, dotfiles, exits, repairs, share_report, stores, tis, watch
+from . import aur_handoff, briefs, census, discover, dotfiles, exits, repairs, restarts, share_report, stores, tis, watch
 from .cve import scan_cves
 from .engine import STATE_ROOT, CommandResult, _write_json, load_json
 from .exits import Stopped
@@ -39,6 +39,8 @@ AUR_BY_HAND = "yay -Sua"
 # Runs the notifier given as its arguments and waits; a click on the notice answers "default".
 # Only then does it open $OPEN (a terminal) on $FIX, and keeps the window until Enter.
 CLICK_SCRIPT = 'choice=$("$@"); [ "$choice" = default ] && exec $OPEN sh -c "$FIX; printf \'\\n[enter] \'; read _"'
+# Stores whose update replaces files that running programs map; Flatpak and Snap run their own copies.
+REPLACES_FILES = frozenset({"repo", "aur"})
 RUN_ID = re.compile(r"auto-\d{8}T\d{6}[+-]\d{4}(-\d+)?")
 
 
@@ -428,6 +430,7 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
         body += f" · fixed by itself: {count} failure{'s' if count > 1 else ''} it learned here"
     if report["held"]:
         body += f" · held: {', '.join(report['held'])}"
+    body += restart_note(report.get("restart"))
     if report.get("offers"):
         body += f" · could also follow: {', '.join(offer['upstream'] for offer in report['offers'])} (arch-update dotfiles --suggest)"
     quiet = report["exit_code"] in (exits.IDLE, exits.READY_FOR_REBOOT, exits.SKIPPED) or exits.interrupted(report["exit_code"])
@@ -447,6 +450,15 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
     # The wait for that click lives in its own unit: this run does not stay alive for it.
     unit =["systemd-run", "--user", "--collect", "--quiet", f"--setenv=FIX={fix}", f"--setenv=OPEN={' '.join(terminal)}"]
     sh.capture([*unit, "--", "sh", "-c", CLICK_SCRIPT, "sh", *notice[:2], "--wait", f"--action=default={fix}", *notice[2:]], timeout=10)
+
+
+def restart_note(found: dict[str, Any] | None) -> str:
+    """The notice's words for what still runs replaced code: what to restart, and a reboot when only that helps."""
+    if not found:
+        return ""
+    names = [*found.get("system", []), *found.get("user", []), *found.get("programs", [])]
+    said = f" · restart: {', '.join(names)}" if names else ""
+    return said + (f" · reboot needed: {'; '.join(found.get('why') or [])}" if found.get("reboot") else "")
 
 
 def _new_run_dir(run_id: str) -> tuple[str, Path]:
@@ -500,7 +512,7 @@ def run_auto(
             skipped = {"run_id": run_id, "started_at": None, "finished_at": datetime.now().astimezone().isoformat(), "dry_run": False, "out": 0}
             skipped.update(exit_code=exits.SKIPPED, state=exits.NAMES[exits.SKIPPED], looks=0, crash=None, trouble=[], verdicts=[], updated={}, held={})
             skipped.update(signal=None, child_stopped=None)
-            skipped.update(repairs=[], pacnew=[], reboot_required=False, cve={"known": False, "error": "not scanned"}, wrote=None, reason="another run holds the lock")
+            skipped.update(repairs=[], pacnew=[], reboot_required=False, restart=None, cve={"known": False, "error": "not scanned"}, wrote=None, reason="another run holds the lock")
             announce(sh, skipped)
             return skipped
         run_id, run_dir = _new_run_dir(run_id)
@@ -508,6 +520,7 @@ def run_auto(
         world = World(sh, None, [], run_id, run_dir, dry_run=dry_run)
         world.watcher = watcher or world.watcher
         out, crash, previous, cve = 0, None, None, {"known": False, "error": "not scanned"}
+        restart: dict[str, Any] | None = None  # None: no package was replaced, so nothing was looked for
         looking = None
         try:
             # On SIGTERM the command in flight is left to finish and no new one starts; the run then ends as interrupted.
@@ -520,6 +533,8 @@ def run_auto(
             if world.dirty:
                 world.look()  # halted after changing something: describe what was left, decide nothing
             cve = cve_axis()
+            if not dry_run and REPLACES_FILES & set(world.updated):
+                restart = restarts.scan().as_dict()  # reads only: a person restarts what it names
         except KeyboardInterrupt as stop:  # the report below is still written and the lock still released
             out, world.interrupted = 0, True
             world.signum = getattr(stop, "signum", signal.SIGINT)
@@ -565,6 +580,7 @@ def run_auto(
             "repairs": world.repairs,
             "pacnew": world.pacnew,
             "reboot_required": world.reboot,
+            "restart": restart,
             "cve": cve,
             "wrote": str(run_dir),  # a dry run still keeps its report and lock file here
         }
@@ -674,6 +690,14 @@ def status() -> str:
     lines += [f"  pacnew: {path}\n    fix: sudo pacdiff" for path in report["pacnew"]]
     if report["reboot_required"]:
         lines.append("  reboot pending\n    fix: systemctl reboot")
+    found = report.get("restart") or {}
+    lines += [f"  restart: {command}" for command in restarts.commands(found)]
+    if found.get("programs"):
+        lines.append(f"  still running replaced files: {', '.join(found['programs'])} (close and start again)")
+    if found.get("reboot"):
+        lines.append(f"  reboot needed: {'; '.join(found['why'])}\n    fix: systemctl reboot")
+    if found.get("unread"):
+        lines.append(f"  not looked into: {found['unread']} processes of other accounts (system services; only uid 0 may read them)")
     return clean("\n".join(lines) + "\n")
 
 

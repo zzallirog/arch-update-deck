@@ -56,6 +56,9 @@ def private_home(tmp_path, monkeypatch):
     (tmp_path / "proc").mkdir()
     (tmp_path / "sys").mkdir()
     monkeypatch.setattr(quiet, "PROC", tmp_path / "proc")
+    from arch_updater import restarts
+
+    monkeypatch.setattr(restarts, "PROC", tmp_path / "proc")  # the restart scan after an update reads /proc too
     monkeypatch.setattr(quiet, "SYS", tmp_path / "sys")
     for name, module in list(sys.modules.items()):
         if not name.startswith("arch_updater."):

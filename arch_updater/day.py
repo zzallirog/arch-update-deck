@@ -31,7 +31,7 @@ from datetime import datetime
 from typing import Any, TextIO
 
 from . import atomic
-from . import auto, exits, home, quiet
+from . import auto, exits, home, quiet, restarts
 from .engine import STATE_ROOT, available_kernel_profiles, load_json, read_aur_queue, select_kernel
 from .keepalive import NOTICE as TICKET_EXPIRED, Keepalive
 from .scheduler import AUTO_UNIT
@@ -403,6 +403,14 @@ def summary(report: dict[str, Any], changes: list[Row] = ()) -> tuple[str, list[
     for line in held.get("aur_by_hand") or []:  # "name: reason", built from the AUR's answer
         lines.append(f"{ink(GREY, 'AUR by hand, ')}{ink(WHITE, clean(line))}")
     lines += [f"{ink(GREY, 'new config version: ')}{ink(WHITE, path)}{ink(GREY, '  compare: sudo pacdiff')}" for path in report.get("pacnew") or []]
+    found = report.get("restart") or {}
+    lines += [f"{ink(GREY, 'restart by hand: ')}{ink(WHITE, clean(command))}" for command in restarts.commands(found)]
+    if found.get("programs"):
+        lines.append(f"{ink(GREY, 'still running replaced files, close and start again: ')}{ink(WHITE, clean(', '.join(found['programs'])))}")
+    if found.get("reboot"):
+        lines.append(ink(WHITE, clean(f"reboot needed: {'; '.join(found['why'])}")))
+    if found.get("unread"):
+        lines.append(ink(GREY, f"system services not looked into: {found['unread']} processes only uid 0 may read"))
     headline = "DONE" if good else "FAILED"
     if report.get("reboot_required"):
         headline += " · REBOOT NEEDED"
