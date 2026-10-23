@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__, aur_handoff, auto, briefs, day, discover, news
+from . import __version__, aur_handoff, auto, briefs, day, discover, news, rollback
 from .auto import init_config, run_auto, status, sudoers_rules
 from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
@@ -186,6 +186,9 @@ def build_parser() -> argparse.ArgumentParser:
     vault_parser = subparsers.add_parser("vault", help="Show the known failures, or name the ones in a piece of output")
     vault_parser.add_argument("--classify")
     subparsers.add_parser("cve", help="Scan installed packages against the Arch security tracker")
+    rollback_parser = subparsers.add_parser("rollback", help="What changed since the record an update wrote first, and the pacman -U from the cache that puts it back")
+    rollback_parser.add_argument("--record", help="The record to go back to (a folder name under keep/); default: the newest")
+    rollback_parser.add_argument("--yes", action="store_true", help="At a terminal: install without asking first (pacman still asks its own questions)")
     news_parser = subparsers.add_parser("news", help="Arch news that asks for a manual step before an upgrade; the weekly run waits for it")
     news_parser.add_argument("--ack", action="store_true", help="Mark what is listed as read, so the weekly run goes on")
     scan_parser = subparsers.add_parser("scan-sessions", help="Find update sessions in raw transcripts")
@@ -275,6 +278,10 @@ def main(argv: list[str] | None = None) -> int:
         if command == "cve":
             _json(scan_cves())
             return 0
+        if command == "rollback":
+            config = load_json(auto.CONFIG_PATH) if auto.CONFIG_PATH.is_file() else None
+            keep = auto.World(Shell(), config, [], "rollback", None, dry_run=True).keep_root()
+            return rollback.run(Shell(), keep, args.record, args.yes)
         if command == "news":
             posts = news.waiting(Shell(), STATE_ROOT)
             for post in posts:

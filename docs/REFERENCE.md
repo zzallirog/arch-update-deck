@@ -234,6 +234,7 @@ is caught only by Update Day.
 | `census [--share [--json]]` | Lists the cases this machine recorded or learned: `[ ]` only here, `[x]` already handed upstream, and the count of `*` official ones (shipped with the tool, `"origin": "official"` in the catalogue). `--share` opens one GitHub issue with every case not yet handed upstream filled in (home folder written `~`, login `<user>`, each `"origin": "local"`) and marks them `[x]`; you press Submit, or close the tab. Nothing is chosen case by case, and nothing is sent by the tool itself. Without a desktop it prints the link; `--json` prints every local case as JSON. Sharing is optional and apart from the update. Each learned fix is offered twice at most: at the `learn` prompt, and once more in the notice of the first run in which that fix repaired a failure by itself and the run ended well. An offer counts as made only where a person is shown it: a `learn` outside a terminal (an assistant or a script ran it) prints one line naming `census --share` and leaves the offer for the next notice, and a run with no `notify-send` leaves it for the next one that has it. A click on the notice runs `census --share` when no problem has a `fix` of its own and the AUR was not held. `"share": false` turns the offer off, and a fix already handed upstream is never offered. |
 | `vault [--classify TEXT]` | Prints the shipped catalogue of known failures as JSON, or only the entries whose pattern matches `TEXT`. |
 | `cve` | Prints the `arch-audit` findings as JSON (`available`, `findings`, `count`, `error`). Exit 0 even when `arch-audit` is missing. |
+| `rollback [--record NAME] [--yes]` | Compares the newest record (or `NAME`, a folder under `keep/`) with `pacman -Q` now and prints each package to put back with its cached file, or `not in the cache: skipped`, plus what was installed since. At a terminal it asks `Roll back N packages with pacman -U? [y/N]`; `--yes` skips that question only. Without a terminal it prints and exits 0, or 1 with `--yes`. See [Rollback](#rollback). |
 | `news [--ack]` | Lists the Arch news posts of the last 30 days that ask for a manual step and that nobody has marked read; `--ack` marks them read, which lets the weekly run go on. The first look on a machine marks everything already in the feed as read, so only a post that appears later holds a run back. See [Arch news](#arch-news). |
 | `scan-sessions [--output-dir DIR] [--json]` | See [Session scanner](#session-scanner). |
 | `--version` | Prints the version. |
@@ -254,6 +255,10 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
 
 ### Changed in 0.20.04
 
+- New: `arch-update rollback`. The record an update writes first is compared
+  with the machine now, and the old versions are put back from the package
+  cache with `sudo pacman -U`, after a yes at a terminal. See
+  [Rollback](#rollback).
 - Before an unattended AUR build, each waiting package's `PKGBUILD`, `.install`
   and local source files are read for red flags (network tools, privileges,
   `eval` and base64 decoding, command substitution at the top, invisible or
@@ -411,7 +416,11 @@ in the profile file. `arch-update` with no command opens Update Day instead.
   an update is not guarded. SIGTERM during an update lets the command in
   progress finish and starts nothing new; Ctrl-C and SIGHUP never kill it either
   (see [Interrupts](#interrupts)).
-- The record written before an update has no restore command.
+- The record written before an update is read back by `arch-update rollback`
+  (see [Rollback](#rollback)): it prints what changed since and the
+  `sudo pacman -U` from the cache that puts it back, and installs only after a
+  yes at a terminal, without `--noconfirm`. Nothing restores `etc.tar.zst`; it
+  is there to be read.
 - Kernel selection installs the package with `pacman -S --needed`. With GRUB it
   rewrites `GRUB_DEFAULT`, after copying `/etc/default/grub` to
   `/etc/default/grub.arch-updater-<time>.bak`. If installing the file or
@@ -521,6 +530,38 @@ of each), `pacnew_removed` (what this run deleted) and `pacnew_not_pruned`
 (why identical ones are left, `""` otherwise). A dry run reads the states and
 deletes nothing. The notification adds `removed N .pacnew identical to the
 live file`.
+
+## Rollback
+
+`arch-update rollback` reads `packages.txt` of a record (the newest under the
+`keep` folder, or the one named with `--record`), runs `pacman -Q`, and lists
+every package whose version differs or that was removed since, with the file of
+the old version: `<name>-<version>-<arch>.pkg.tar.<ext>`, exactly that name
+and version (a `.sig` beside it is not taken), in each `CacheDir` that
+`pacman-conf` names (default `/var/cache/pacman/pkg`), then in
+`~/.cache/yay/<name>/` for an AUR package. The last line is the command:
+
+```text
+record auto-20261020T120000+0300: 3 packages to put back
+  linux   6.18.1-1 → back to 6.17.9-1  /var/cache/pacman/pkg/linux-6.17.9-1-x86_64.pkg.tar.zst
+  lost    2-2 → back to 2-1  not in the cache: skipped
+  fresh   installed since; not undone (by hand: sudo pacman -Rs fresh)
+1 cannot be put back from the cache; putting back only the rest can leave packages that expect each other's new versions
+to roll back: sudo pacman -U -- /var/cache/pacman/pkg/linux-6.17.9-1-x86_64.pkg.tar.zst
+```
+
+| How it is run | What happens | Exit |
+|---|---|---|
+| At a terminal | asks `Roll back N packages with pacman -U? [y/N]`; on `y` runs the command on the terminal, where sudo asks for the password and pacman asks its own questions | pacman's, or 0 on no |
+| At a terminal with `--yes` | runs the command without the tool's question; pacman still asks its own | pacman's |
+| Without a terminal | prints the plan only | 0 |
+| Without a terminal, with `--yes` | prints the plan and `pacman asks its own questions while it installs: run this at a terminal`; installs nothing | 1 |
+
+The command never carries `--noconfirm`: a rollback can meet conflicts and
+replacements a person decides. Packages installed since the record are not
+removed, a version no cache holds is skipped, and `paccache -rk2` (the
+low-space repair) keeps only two versions of each package, so older records
+find less. Without a record the command says `no record yet` and exits 1.
 
 ## Restarts after an update
 
