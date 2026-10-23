@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import atomic
+from . import atomic, pkgbuild_scan
 from .shell import Shell
 
 AUR_RPC = "https://aur.archlinux.org/rpc/v5/info"
@@ -49,7 +49,7 @@ def aur_too_fresh(sh: Shell, min_age_days: float) -> list[str]:
     return aur_review(sh, min_age_days)[0]
 
 
-def aur_review(sh: Shell, min_age_days: float, state: Path | None = None) -> tuple[list[str], list[str]]:
+def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: bool = False) -> tuple[list[str], list[str]]:
     """Foreign packages whose AUR entry changed within the last few days.
 
     A poisoned AUR package is usually reported and removed within days; holding
@@ -59,7 +59,10 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None) -> tup
     Returns the fresh names, and the waiting updates that are never built unasked,
     each as "name: reason": a VCS package, an orphan, and an entry whose
     maintainer changed since the last time it was seen up to date (`state`, a
-    JSON file; an update by hand is what accepts the new maintainer).
+    JSON file; an update by hand is what accepts the new maintainer). With `scan`,
+    every other waiting update has its PKGBUILD and .install read first
+    (pkgbuild_scan.py); a red flag in them holds it the same way, with the flag
+    as its reason.
     """
     foreign = sh.capture(["pacman", "-Qqm"], timeout=60)
     if foreign.returncode not in (0, 1):  # 1: no foreign packages
@@ -83,6 +86,7 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None) -> tup
     except (OSError, ValueError):
         seen = {}
     unsafe: list[str] = []
+    to_read: dict[str, list[str]] = {}  # package base -> the waiting names built from it
     for item in results:
         name, base, maintainer = item["Name"], item.get("PackageBase") or item["Name"], item.get("Maintainer")
         if name not in versions:
@@ -95,7 +99,12 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None) -> tup
             unsafe.append(f"{name}: orphaned in the AUR")
         elif seen.get(base, maintainer) != maintainer:
             unsafe.append(f"{name}: maintainer changed from {seen[base]} to {maintainer}")
+        elif scan and name not in fresh:
+            to_read.setdefault(base, []).append(name)
         seen.setdefault(base, maintainer)  # first sight: an orphan is kept as None, so an adoption is a change
+    for base, waiting in to_read.items():
+        flags = pkgbuild_scan.review(sh, base)
+        unsafe += [f"{name}: {'; '.join(flags)}" for name in waiting if flags]
     atomic.write(state, json.dumps(seen, indent=1, sort_keys=True))
     return fresh, sorted(unsafe)
 

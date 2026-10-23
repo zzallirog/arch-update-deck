@@ -254,6 +254,12 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
 
 ### Changed in 0.20.04
 
+- Before an unattended AUR build, each waiting package's `PKGBUILD`, `.install`
+  and local source files are read for red flags (network tools, privileges,
+  `eval` and base64 decoding, command substitution at the top, invisible or
+  non-ASCII characters in names, binary sources); a flag holds the package for
+  you under `aur_by_hand`, with the file, line and reason. See
+  [AUR in detail](#aur-in-detail).
 - A `.pacnew` identical to its live file is deleted after the update, through
   a new shim (`arch-update-pacnew-prune`, no arguments, its own sudoers rule):
   the only file the tool deletes on its own, each one in the report. A
@@ -561,7 +567,8 @@ the result block of Update Day prints the same.
   yay -Sua`. Update it with `yay -Sua`, or click the notification.
 - With `true`, `yay -Sua --noconfirm --answerclean None --answerdiff None
   --answeredit None --noremovemake --sudo <arch-update> --sudoflags aur-handoff`
-  builds the packages. Nobody reads the `PKGBUILD` or the diff before it runs.
+  builds the packages. No person reads the `PKGBUILD` or the diff before it
+  runs; the tool reads them for a few red flags (below), nothing more.
   Only `yay` is used for an unattended build; with `paru` alone the AUR is held.
   Without the root shim (`/usr/local/libexec/arch-update-aur-install`, owned by
   root, writable by nobody else) the AUR is held too.
@@ -572,8 +579,33 @@ the result block of Update Day prints the same.
   `-nightly`), of an orphan, or of a package whose maintainer differs from the
   one recorded when it was last up to date (`aur-maintainers.json` in the state
   folder) is passed to `--ignore` too, under `aur_by_hand`. Updating it yourself
-  records the new maintainer. This is a cool-down and a few red flags; it does
-  not check what the package does.
+  records the new maintainer.
+- Every other waiting update has its `PKGBUILD` read from the AUR
+  (`https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=<base>`, once per
+  package base), with its `.install` and each local source file it names
+  (`arch_updater/pkgbuild_scan.py`). The files are read as text, never
+  sourced. A red flag passes the package to `--ignore` under `aur_by_hand`,
+  as `<name>: <file> line <n>: <what>`:
+
+  | Red flag | Example |
+  |---|---|
+  | a network tool run as a command: `curl`, `wget`, `nc`, `ncat`, `netcat`, `socat` (also behind `env`, `exec`, a variable assignment, a path, in a pipe or a substitution) | `wget -O x.bin <url>` in `build()` |
+  | a request for privileges: `sudo`, `doas`, `pkexec`, `run0`, `su` | `sudo install …` |
+  | hidden code: `eval`, or decoding with `base64 -d`, `xxd -r`, `openssl … base64 -d` | `base64 -d blob > x` |
+  | a command substitution (`$(…)`, backticks; not `$((…))`) outside every function, which runs as soon as the file is read | `pkgver=$(date +%s)` at the top |
+  | an invisible character anywhere (zero width, direction override, soft hyphen) | `U+202E` |
+  | a character that is not ASCII in `pkgname`, `pkgbase`, `depends` and the other relation arrays, `source`, `url`, `install`, or in the name part of `optdepends` | a Cyrillic `а` in `pаcman` |
+  | a local source that is binary: an ELF program, or a file with a NUL byte | a shipped executable |
+
+  A tool only named (in `depends`, a comment, a quoted message, a file name)
+  is not a flag. What cannot be read is a flag too: a `PKGBUILD` or local file
+  the AUR does not serve, a local source name with a variable that cannot be
+  filled in, more than 40 local files. The scan leans to false alarms, which
+  cost one `yay -Sua` by hand. It does not check what the package does: a
+  build that misbehaves without these marks still gets through, and the
+  cool-down is still the defence there. A `.install` that sets colours at its
+  top (`$(tput …)`) is flagged; such a package would be refused by the shim
+  anyway, which installs no package with an install script.
 - If the age lookup fails, the AUR is not updated. That failure
   (`AUR-UNREACHABLE`) has a repair, a wait of 60 s, after which the lookup is
   tried again.

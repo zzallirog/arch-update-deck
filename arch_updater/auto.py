@@ -246,7 +246,7 @@ class World:
             self.held["aur"] = f"unattended AUR needs yay and the root shim {aur_handoff.SHIM}; run `{AUR_BY_HAND}`"
             return None
         try:
-            fresh, unsafe = stores.aur_review(self.sh, aur_min_age(self.config), STATE_ROOT / stores.MAINTAINERS)
+            fresh, unsafe = stores.aur_review(self.sh, aur_min_age(self.config), STATE_ROOT / stores.MAINTAINERS, scan=True)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             self._fail("aur", self._case("AUR-UNREACHABLE"), f"{type(exc).__name__}: {exc}")
             return None
