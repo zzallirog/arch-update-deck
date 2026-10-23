@@ -31,3 +31,18 @@ def cause(detail: str) -> str:
     """The line of a failed command's output that says why: the last one with words in it, not the `[exit N]` the log adds."""
     lines = [line.strip() for line in str(detail).splitlines()]
     return next((line for line in reversed(lines) if line and not _EXIT_LINE.fullmatch(line)), "")
+
+
+HIDDEN = "<redacted>"
+# The user part of a URL (`https://user:password@host`, or a token given as the user) and query values with a
+# secret's name. Mirror URLs and build output carry them now and then; a brief, a case or a share must not.
+_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/?#@\s]+@")
+_SECRET_QUERY = re.compile(
+    r"(?i)([?&;](?:access_token|private_token|auth_token|token|api_key|apikey|key|password|passwd|pass|pwd|secret|client_secret"
+    r"|sig|signature|x-amz-signature|x-amz-credential|x-amz-security-token)=)[^&#\s'\"]+"
+)
+
+
+def secrets(text: str) -> str:
+    """The text with credentials in URLs replaced by <redacted>; the host, path and other parameters stay."""
+    return _SECRET_QUERY.sub(rf"\1{HIDDEN}", _USERINFO.sub(rf"\1{HIDDEN}@", str(text)))

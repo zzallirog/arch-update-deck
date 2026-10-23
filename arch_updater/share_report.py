@@ -7,7 +7,7 @@ from dataclasses import asdict
 from typing import Any
 
 from . import atomic
-from .textsafe import clean
+from .textsafe import clean, secrets
 
 SCHEMA = "arch-update-share/v1"
 CENSUS_SCHEMA = "arch-update-census/v1"
@@ -117,7 +117,8 @@ def share_census(cases: list[Any], home: str, user: str) -> dict:
     def scrub(value: Any) -> Any:
         if not isinstance(value, str):
             return value
-        text = clean(value).replace(home, "~") if home else clean(value)
+        text = secrets(clean(value))
+        text = text.replace(home, "~") if home else text
         return re.sub(rf"\b{re.escape(user)}\b", "<user>", text) if user else text
 
     local = [case for case in cases if case.id.startswith("LOCAL-")]

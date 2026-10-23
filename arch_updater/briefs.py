@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import census
+from .textsafe import secrets
 from .engine import STATE_ROOT
 
 BRIEFS = "briefs"
@@ -84,6 +85,7 @@ def write(
     """
     folder = root(state_root) / f"{run_id}-{re.sub(r'[^A-Za-z0-9._-]+', '_', store)}"
     folder.mkdir(parents=True, exist_ok=True)
+    output = secrets(output)  # a brief is handed to whoever fixes it: no password or token of a URL
     (folder / "failure.log").write_text(output, encoding="utf-8")
     meta = {"store": store, "case": case.id, "run_id": run_id, "where": where, "at": datetime.now().astimezone().isoformat(), "learned": None, **(facts or {})}
     (folder / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")

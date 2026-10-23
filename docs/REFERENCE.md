@@ -260,6 +260,11 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   (`name old -> new`): the update was partial. A transaction that would remove
   a `HoldPkg` package fails as the new case `HOLDPKG-IN-TARGETS`. See
   [Sequence of the update](#sequence-of-the-update).
+- A password or token in a URL (`https://user:pass@host`, a token given as the
+  user, `?token=`, `access_token`, `key`, `sig`, `X-Amz-Signature` and the like)
+  is replaced by `<redacted>` in the report, the notice, briefs, the cases
+  recorded in `census.json` and `census --share`. The raw `run.log` keeps the
+  output as it was. See [Files](#files).
 - The commands whose output is matched against the catalogue and the listings
   run with `LC_ALL=C`, so a machine in another language still has its
   failures recognised (see [Environment variables](#environment-variables)).
@@ -1382,6 +1387,18 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `~/.local/bin/arch-update`, `~/.local/share/arch-update-deck/`, `~/.local/share/applications/arch-update.desktop` | The installation. The desktop entry starts `arch-update` in a terminal, so it opens Update Day. |
 | `/etc/default/grub.arch-updater-<time>.bak` | Backup made by each kernel selection. |
 | `~/.cache/yay/<name>.quarantine-<run id>` | Cache directories set aside by `quarantine-aur-cache`. |
+
+What a failed command printed reaches the report (`trouble`), the notice,
+`auto --status`, a brief and a census case only after `textsafe.secrets`: the
+user part of any URL (`https://user:pass@host`, or a token given as the user)
+and the values of query parameters named `token`, `access_token`,
+`private_token`, `auth_token`, `api_key`, `apikey`, `key`, `password`,
+`passwd`, `pass`, `pwd`, `secret`, `client_secret`, `sig`, `signature`,
+`X-Amz-Signature`, `X-Amz-Credential` or `X-Amz-Security-Token` become
+`<redacted>`; host, path and other parameters stay. A recorded case's pattern
+matches anything in the hidden place, so the same failure with another
+password is still the same case. `census --share` applies it again. Only
+`run.log` holds the output whole.
 
 Every file above that the tool rewrites in place (state files such as `aur-maintainers.json`, `ask-result.json`, `news-seen.json`, `dotfiles.json`) is written to a temporary file, flushed to disk and renamed over the old one, so a power cut leaves the old content or the new one and never half of it.
 

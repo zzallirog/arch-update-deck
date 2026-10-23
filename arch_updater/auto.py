@@ -27,7 +27,7 @@ from .cve import scan_cves
 from .engine import STATE_ROOT, CommandResult, _write_json, load_json
 from .exits import Stopped
 from .shell import Shell
-from .textsafe import cause, clean
+from .textsafe import cause, clean, secrets
 from .watch import Verdict
 
 PROGRAM = Path(__file__).with_name("control.tis")
@@ -270,6 +270,7 @@ class World:
         return case
 
     def _fail(self, store: str, case: census.Case, detail: str) -> None:
+        detail = secrets(detail)  # what leaves the run log (report, notice, brief) carries no password or token of a URL
         self.outputs[store] = detail  # whole, for the brief
         self.failed[store] = Verdict(store, "fail", case.id, detail.strip()[-300:])
 

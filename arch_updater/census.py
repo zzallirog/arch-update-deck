@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import textsafe
 from .engine import VAULT_PATH, _write_json, load_json
 
 LOCAL_FILE = "census.json"
@@ -92,9 +93,10 @@ def record(cases: list[Case], state_root: Path, output: str, where: str, log: Pa
     Its pattern is the failure's signature with numbers loosened, so the same
     failure with another version or path is recognised next time.
     """
-    line = signature(output)
+    line = textsafe.secrets(signature(output))  # a case is kept, shown and shared: no credential of a URL in it
     # A failure with no output has no line to match on; its pattern is "the output is blank".
     pattern = _VOLATILE.sub(lambda _: r"(?:0x[0-9a-fA-F]+|\d+)", re.escape(line)) if output.strip() else r"\A\s*\Z"
+    pattern = pattern.replace(re.escape(textsafe.HIDDEN), r"[^/?#@&\s]+")  # the hidden part still matches whatever stood there
     digest = hashlib.sha256(pattern.encode()).hexdigest()[:8]
     known = next((case for case in cases if case.id == f"LOCAL-{digest}"), None)
     if known is not None:
