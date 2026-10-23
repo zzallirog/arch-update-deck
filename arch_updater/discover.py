@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from . import atomic
 from .engine import STATE_ROOT
 
 HOME = Path.home()
@@ -162,8 +163,7 @@ def news(found: list[Offer], state_root: Path | None = None, now: float | None =
     for offer in fresh:
         seen[offer.path] = now
     if fresh:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(seen, indent=1, sort_keys=True), encoding="utf-8")
+        atomic.write(path, json.dumps(seen, indent=1, sort_keys=True))
     return fresh
 
 

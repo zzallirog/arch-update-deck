@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from . import atomic
 from .engine import STATE_ROOT
 
 HISTORY_PATH = STATE_ROOT / "patrol-history.json"
@@ -51,6 +52,5 @@ def append_patrol_history(summary: dict[str, Any] | None) -> list[dict[str, Any]
     }
     history.insert(0, entry)
     history = history[:HISTORY_CAP]
-    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HISTORY_PATH.write_text(json.dumps(history, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic.write(HISTORY_PATH, json.dumps(history, ensure_ascii=False) + "\n")
     return history

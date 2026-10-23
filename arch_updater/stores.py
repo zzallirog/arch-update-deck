@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import atomic
 from .shell import Shell
 
 AUR_RPC = "https://aur.archlinux.org/rpc/v5/info"
@@ -67,9 +68,11 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None) -> tup
     if not names:
         return [], []
     answer = sh.post(AUR_RPC, [("arg[]", name) for name in names])
-    if answer.get("type") != "multiinfo":  # an error document must not read as "nothing is fresh"
+    if answer.get("type") != "multiinfo" or answer.get("error"):  # an error document must not read as "nothing is fresh"
         raise ValueError(f"AUR answered {answer.get('type')}: {answer.get('error')}")
     results = answer["results"]
+    if answer.get("resultcount", len(results)) != len(results):  # a cut-off answer lists fewer than it counts
+        raise ValueError(f"AUR answer is incomplete: counts {answer['resultcount']}, lists {len(results)}")
     cutoff = time.time() - min_age_days * 86400
     fresh = sorted(item["Name"] for item in results if item["LastModified"] > cutoff)
     if state is None:
@@ -93,8 +96,7 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None) -> tup
         elif seen.get(base, maintainer) != maintainer:
             unsafe.append(f"{name}: maintainer changed from {seen[base]} to {maintainer}")
         seen.setdefault(base, maintainer)  # first sight: an orphan is kept as None, so an adoption is a change
-    state.parent.mkdir(parents=True, exist_ok=True)
-    state.write_text(json.dumps(seen, indent=1, sort_keys=True), encoding="utf-8")
+    atomic.write(state, json.dumps(seen, indent=1, sort_keys=True))
     return fresh, sorted(unsafe)
 
 

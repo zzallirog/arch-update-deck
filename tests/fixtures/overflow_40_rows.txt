@@ -31,7 +31,7 @@
 
  TOTAL    60 from repositories
 
- MACHINE  fine · 8 checks
+ MACHINE  fine · 9 checks
  PENDING  nothing since last time
 
  UPDATE NOW?  [y] yes   [N] not now   Enter means no

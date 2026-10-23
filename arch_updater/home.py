@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import atomic
 from .engine import STATE_ROOT
 from .shell import Shell
 
@@ -109,7 +110,6 @@ def track(place: Place | None, state_root: Path | None = None, now: float | None
         if place is None or place.where != "unknown":
             path.unlink(missing_ok=True)
         elif _since(path.parent) is None:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({"since": now or time.time(), "reason": place.detail}), encoding="utf-8")
+            atomic.write(path, json.dumps({"since": now or time.time(), "reason": place.detail}))
     except OSError:
         pass

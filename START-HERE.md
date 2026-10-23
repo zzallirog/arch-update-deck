@@ -22,7 +22,7 @@ arch-update
 The first time, the tool writes a starter configuration to
 `~/.config/arch-updater/auto.json` and says so under `PENDING`. The screen shows
 the packages waiting with their source (`REPO`, `AUR · BY HAND`, `FLATPAK`,
-`SNAP`), `TOTAL`, `MACHINE` (`fine · 8 checks`, or the failed checks in red),
+`SNAP`), `TOTAL`, `MACHINE` (`fine · 9 checks`, or the failed checks in red),
 `PENDING` (what the last update left undone, with the command that fixes it) and
 the question `UPDATE NOW?`. A dim line offers `l` (end of the last log) and `k`
 (kernel profiles). The question is left out when the repository list cannot be

@@ -35,7 +35,7 @@ WantedBy=timers.target
 """
 AUTO_UNIT = "arch-update-auto"
 AUTO_EVERY_DAYS = 7  # owner 2026-10-08: a week for the package stores; dotfiles follow monthly (dotfiles.EVERY_DAYS)
-AUTO_SCHEDULE = "3min after login, then once a day while the session lasts; a visit only if the last one is 7 days old"
+AUTO_SCHEDULE = "3min after the graphical session starts, then once a day while the session lasts; a visit only if the last one is 7 days old"
 AUTO_SERVICE = """[Unit]
 Description=Arch Update Deck: unattended update, offered at login every few days
 
@@ -52,13 +52,16 @@ TimeoutStopSec=150min
 """
 AUTO_TIMER = """[Unit]
 Description=Arch Update Deck: unattended update, offered at login every few days
+# Bound to the graphical session: with lingering the user manager starts at boot, which is not a login.
+After=graphical-session.target
+PartOf=graphical-session.target
 
 [Timer]
-OnStartupSec=3min
+OnActiveSec=3min
 OnUnitInactiveSec=1d
 
 [Install]
-WantedBy=timers.target
+WantedBy=graphical-session.target
 """
 
 

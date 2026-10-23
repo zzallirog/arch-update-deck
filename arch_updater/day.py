@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, TextIO
 
+from . import atomic
 from . import auto, exits, home, quiet
 from .engine import STATE_ROOT, available_kernel_profiles, load_json, read_aur_queue, select_kernel
 from .keepalive import NOTICE as TICKET_EXPIRED, Keepalive
@@ -484,7 +485,7 @@ def _record(outcome: str, code: int, reason: str = "") -> None:
     with contextlib.suppress(OSError):
         STATE_ROOT.mkdir(parents=True, exist_ok=True)
         entry = {"at": datetime.now().astimezone().isoformat(), "outcome": outcome, "exit_code": code, "reason": reason}
-        (STATE_ROOT / ASK_RESULT).write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        atomic.write(STATE_ROOT / ASK_RESULT, json.dumps(entry) + "\n")
 
 
 def confirm(question: str, stdin: TextIO = sys.stdin, out: TextIO = sys.stdout) -> bool:
@@ -792,6 +793,9 @@ def scheduled(sh: Shell | None = None) -> int:
     stop = auto.hold(sh, config)
     if stop is not None and stop.case == "CONDITION":  # the owner's own "not now": the timer tries again tomorrow
         print(f"arch-update: not now, {human(stop.probe)}: {stop.detail}")
+        return exits.SKIPPED
+    if stop is not None and stop.case == "ARCH-NEWS-MANUAL":  # a post asks for a step by hand: nothing runs until a person has read it
+        _say(sh, f"{stop.detail}; the weekly update was not run")
         return exits.SKIPPED
     reason = quiet.gate(config)
     waiting = quiet.waited(reason, STATE_ROOT)

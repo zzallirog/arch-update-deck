@@ -2,6 +2,6 @@
 
  TOTAL    nothing waiting
 
- MACHINE  fine · 8 checks
+ MACHINE  fine · 9 checks
  PENDING  nothing since last time
  weekly update is off: arch-update schedule --install-auto

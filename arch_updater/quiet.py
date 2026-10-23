@@ -27,6 +27,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any
+from . import atomic
 
 SYS = Path("/sys")
 PROC = Path("/proc")
@@ -76,8 +77,7 @@ def waited(reason: str | None, state_root: Path, now: float | None = None) -> st
             since = float(json.loads(path.read_text(encoding="utf-8"))["since"])
         except (OSError, ValueError, KeyError, TypeError):
             since = now
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({"since": since, "reason": reason}), encoding="utf-8")
+            atomic.write(path, json.dumps({"since": since, "reason": reason}))
         if now - since >= MAX_WAIT_DAYS * 86400:
             path.unlink(missing_ok=True)
             return None

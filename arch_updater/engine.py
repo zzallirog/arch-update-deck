@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from . import atomic
+
 
 DATA_DIR = Path(__file__).resolve().parent / "data"  # shipped inside the package, so a wheel carries it
 CONFIG_PATH = DATA_DIR / "profiles.json"
@@ -488,10 +490,7 @@ def attest(before: dict[str, Any] | None = None, after: dict[str, Any] | None = 
 
 
 def _write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    atomic.write(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
 
 def aur_cache_root() -> Path:

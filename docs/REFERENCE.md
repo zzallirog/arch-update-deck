@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.02. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.03. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -43,7 +43,7 @@ starter one first and says so in a dim line under `PENDING`.
 
  TOTAL    1 from repositories · 1 from AUR (by hand: yay -Sua)
 
- MACHINE  fine · 8 checks
+ MACHINE  fine · 9 checks
  PENDING  nothing since last time
 
  UPDATE NOW?  [y] yes   [N] not now   Enter means no
@@ -73,7 +73,7 @@ except tab and newline. A table cell is one line, with runs of whitespace collap
 ### The look
 
 The checks that fill `MACHINE` run on the main thread while the queue is read on
-a second one. They are `auto.look()`: one pass of the nine checks kept in
+a second one. They are `auto.look()`: one pass of the ten checks kept in
 memory. It writes no `runs/` directory, no report and no `ask-result.json`, takes
 no lock and does not run `arch-audit`. Your configured conditions and `smoke`
 commands do run. Only an update that really starts creates a `runs/auto-<time>/`
@@ -225,6 +225,7 @@ is caught only by Update Day.
 | `census [--share [--json]]` | Lists the cases this machine recorded or learned: `[ ]` only here, `[x]` already handed upstream, and the count of `*` official ones (shipped with the tool, `"origin": "official"` in the catalogue). `--share` opens one GitHub issue with every case not yet handed upstream filled in (home folder written `~`, login `<user>`, each `"origin": "local"`) and marks them `[x]`; you press Submit, or close the tab. Nothing is chosen case by case, and nothing is sent by the tool itself. Without a desktop it prints the link; `--json` prints every local case as JSON. Sharing is optional and apart from the update. Each learned fix is offered twice at most: at the `learn` prompt, and once more in the notice of the first run in which that fix repaired a failure by itself and the run ended well. An offer counts as made only where a person is shown it: a `learn` outside a terminal (an assistant or a script ran it) prints one line naming `census --share` and leaves the offer for the next notice, and a run with no `notify-send` leaves it for the next one that has it. A click on the notice runs `census --share` when no problem has a `fix` of its own and the AUR was not held. `"share": false` turns the offer off, and a fix already handed upstream is never offered. |
 | `vault [--classify TEXT]` | Prints the shipped catalogue of known failures as JSON, or only the entries whose pattern matches `TEXT`. |
 | `cve` | Prints the `arch-audit` findings as JSON (`available`, `findings`, `count`, `error`). Exit 0 even when `arch-audit` is missing. |
+| `news [--ack]` | Lists the Arch news posts of the last 30 days that ask for a manual step and that nobody has marked read; `--ack` marks them read, which lets the weekly run go on. The first look on a machine marks everything already in the feed as read, so only a post that appears later holds a run back. See [Arch news](#arch-news). |
 | `scan-sessions [--output-dir DIR] [--json]` | See [Session scanner](#session-scanner). |
 | `--version` | Prints the version. |
 
@@ -241,6 +242,24 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.03
+
+- The weekly timer is tied to the graphical session, not to the user manager. With
+  lingering the manager starts at boot, so the old timer fired at boot and not at
+  login. It now fires 3 minutes after the graphical login and then once a day.
+  Run `arch-update schedule --install-auto` once to rewrite the unit.
+- The unattended run reads the Arch news and waits for a post that asks for a
+  manual step. See [Arch news](#arch-news).
+- Six more failures are named in the catalogue: an invalid or unknown signature,
+  a corrupt download, a pacman hook that failed after the packages were
+  installed, unsatisfied dependencies, a package that no repository has, and a
+  filesystem that went read-only. None repairs itself; each has a `fix` that
+  reads or shows, and none turns signature checking off.
+- Foreign-package answers from the AUR that list fewer packages than they count,
+  or that carry an `error` field, are refused instead of being read as "nothing
+  is fresh".
+- State files are replaced atomically (see [Files](#files)).
 
 ### Changed in 0.20.02
 
@@ -340,7 +359,9 @@ in the profile file. `arch-update` with no command opens Update Day instead.
 - The pacman lock is only tested with `Path.exists()`. A lock left by a killed
   package manager is waited on (up to three times two minutes) and never
   removed; the run exits 30.
-- The update runs `pacman -Syu --noconfirm` and does not fetch the Arch news. A
+- The update runs `pacman -Syu --noconfirm`. It reads the Arch news feed before
+  it starts, but only for the posts that ask for a manual step (see
+  [Arch news](#arch-news)); it does not show or summarise the others. A
   conflict that pacman cannot settle with `--noconfirm` makes the store fail
   (for example `PACMAN-REPLACEMENT-CONFLICT`) and is reported with its `fix`.
 - No shutdown or sleep inhibitor is taken. A logout, suspend or power-off during
@@ -482,7 +503,7 @@ once on `y`; the timer's `auto` cannot, and exits 70.
 
 `y` on Update Day, `arch-update auto` and the timer run the same sequence.
 
-1. **Check.** Nine checks run concurrently. They change nothing, except that the
+1. **Check.** Ten checks run concurrently. They change nothing, except that the
    commands you configure as conditions and smoke tests run as written. The
    screen's `MACHINE` line is one such pass kept in memory (see
    [The look](#the-look)).
@@ -495,6 +516,7 @@ once on `y`; the timer's `auto` cannot, and exits 70.
    | pacman lock | `pacman is busy` | `/var/lib/pacman/db.lck` exists | 30 |
    | disk space | `disk space` | less than 6 GiB free on `/` | 30 |
    | name resolution | `network` | `archlinux.org` does not resolve | 30 |
+   | Arch news | `news` | a post in the Arch news feed asks for a manual step ("manual intervention", "action required", "before upgrading") and `arch-update news --ack` has not marked it read; a feed that cannot be fetched or read passes | 20 |
    | package database | `package database` | `pacman -Dk` exits non-zero | 20 |
    | kernel and services | `kernel and services` | kernel image or initramfs missing; GRUB config without the default kernel; NVIDIA DKMS module missing for an installed kernel (only if `nvidia-dkms` or `nvidia-open-dkms` is installed); a unit that failed after the first check of this run; a Hyprland binary with missing libraries | 30 |
    | programs | `programs` | a configured `smoke` command exits non-zero | 30 |
@@ -539,9 +561,9 @@ The sequence is the program in `arch_updater/control.tis`, executed by
 
 `arch_updater/data/failure-modes.json` is the shipped catalogue (installed under
 `~/.local/share/arch-update-deck/arch_updater/data/`). An entry has an `id`, a
-`meaning`, a `fix`, optionally a `repair`, and for twenty of the thirty-two a
+`meaning`, a `fix`, optionally a `repair`, and for twenty-six of the thirty-nine a
 `match` (a regular expression searched in the failing command's output); the
-other twelve have none and are raised by the checks. The `fix` is one command to run by
+other thirteen have none and are raised by the checks. The `fix` is one command to run by
 hand, on one line, readable by `sh`, with no placeholder. It is never the command
 that just failed: no `fix` is `pacman -Syu`, `yay -Sua`, `paru -Sua`,
 `flatpak update`, `snap refresh` or `arch-update auto` (with or without `sudo`),
@@ -575,6 +597,12 @@ The shipped cases (`arch-update vault` prints them with their `meaning`):
 |---|---|---|
 | `ROOT-SPACE-LOW` | `trim-cache` | `sudo paccache -rk2 && df -h /` |
 | `PACMAN-REPLACEMENT-CONFLICT` | - | `grep -h "in conflict" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 3` |
+| `PGP-SIGNATURE-INVALID` | - | `sudo pacman -Sy --needed archlinux-keyring` |
+| `PACKAGE-ARCHIVE-CORRUPT` | - | `grep -h "corrupted" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 3` |
+| `POST-TRANSACTION-HOOK-FAILED` | - | `grep -B4 "command failed to execute correctly" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 12` |
+| `UNSATISFIED-DEPENDENCIES` | - | `grep -hE "breaks dependency\|unable to satisfy\|could not satisfy" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 5` |
+| `TARGET-NOT-FOUND` | - | `grep -h "target not found" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 3` |
+| `READ-ONLY-FILESYSTEM` | - | `findmnt -O ro -t ext4,btrfs,xfs,f2fs; dmesg \| tail -n 20` |
 | `MIRROR-STALE-404` | `wait-for-mirror` | `sudo pacman -Syyu` |
 | `AUR-CACHE-UPSTREAM-MISSING` | - | `less +G "$(ls -td ~/.local/state/arch-updater/runs/*/ \| head -n 1)run.log"` |
 | `AUR-CACHE-PKGBUILD-MISSING` | `quarantine-aur-cache` | `grep -h "error downloading sources" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 1` |
@@ -600,6 +628,7 @@ The shipped cases (`arch-update vault` prints them with their `meaning`):
 | `NOT-CONFIGURED` | - | `arch-update auto --init` |
 | `NO-ROOT` | - | `sh -c 'f=$(mktemp) && arch-update auto --sudoers > "$f" && visudo -cf "$f" && sudo install -m 0440 "$f" /etc/sudoers.d/zzz-arch-update-auto; rm -f "$f"'` |
 | `INTERRUPTED` | - | `arch-update` |
+| `ARCH-NEWS-MANUAL` | - | `arch-update news` |
 
 `NO-ROOT` and `SUDO-TIMESTAMP-EXPIRED` share the sudoers fix: it writes the rules
 to a temporary file, checks it with `visudo -cf` and only then installs it, so
@@ -618,6 +647,32 @@ the learned case replaces this entry. Do not edit the installed catalogue, which
 `install.sh` overwrites. Only failures of the stores (pacman, AUR, Flatpak, Snap)
 are recorded this way. A failed check is never added to the census.
 
+## Arch news
+
+An unattended `pacman -Syu --noconfirm` cannot do what an Arch news post asks
+for when it says "manual intervention required". So the check `news` reads
+`https://archlinux.org/feeds/news/` before every run and looks, among the posts
+of the last 30 days, for the words `manual intervention`, `manual action`,
+`manual step`, `requires intervention`, `action required` and `before upgrading`
+(title or text). A post found that way and not yet marked read blocks the run
+with case `ARCH-NEWS-MANUAL` (exit 20). The timer's run then exits 80 without
+asking, writes a line to `ask-window.log` and sends a critical notification
+that names the post and its link; it tries again the next day, and the
+notification returns until you act.
+
+To go on: read the post, do what it says, then `arch-update news --ack`.
+`arch-update news` alone lists what waits and changes nothing.
+
+Three things are deliberate. The first look on a machine marks every post
+already in the feed as read, so installing the check does not stop a machine
+that has been running for years. A feed that cannot be fetched or parsed does not
+block anything: the check passes and says `not read`, because a dead news server
+must not hold back security updates. And a post older than 30 days never blocks.
+The feed is asked with a 5-second limit, and the last one that parsed is kept for
+30 minutes in `news-feed.xml`, so the several looks of one run (and its window)
+ask the server once. The check only reads; it never opens a browser or follows
+the link.
+
 ## Schedule and ask mode
 
 ```bash
@@ -625,9 +680,10 @@ arch-update schedule --install-auto
 ```
 
 Writes `arch-update-auto.service` and `arch-update-auto.timer` to
-`~/.config/systemd/user/` and enables the timer. It fires 3 minutes after the
-user manager starts (your login, or boot with lingering) and then once a day
-(`OnStartupSec=3min`, `OnUnitInactiveSec=1d`). The service first runs
+`~/.config/systemd/user/` and enables the timer. The timer is wanted by
+`graphical-session.target`, so it fires 3 minutes after the graphical login (not
+at boot, which is when a lingering user manager starts) and then once a day
+(`OnActiveSec=3min`, `OnUnitInactiveSec=1d`). The service first runs
 `arch-update auto --due` as its `ExecCondition`: exit 0 when the newer of
 `last-auto.json` and `ask-result.json` is 7 days old or neither exists, exit 1
 otherwise, and systemd then skips the run without marking the unit failed. A
@@ -652,7 +708,7 @@ skipped one would wait for the next day. For a fixed day, override both units:
 ```ini
 # ~/.config/systemd/user/arch-update-auto.timer.d/day.conf
 [Timer]
-OnStartupSec=
+OnActiveSec=
 OnUnitInactiveSec=
 OnCalendar=Sun 12:00
 Persistent=true
@@ -1060,6 +1116,8 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `drift/<repository>.md` | The drift report of each dotfiles repository, rewritten at every visit and by `dotfiles --drift`. |
 | `dotfiles.json` | When each dotfiles repository was last visited and left nothing broken. |
 | `discover.json` | When each suggestion of `dotfiles --suggest` was last named in the weekly notice. |
+| `news-feed.xml` | The last Arch news feed that parsed, kept 30 minutes so one run asks the server once. |
+| `news-seen.json` | The Arch news posts a person has marked read (`arch-update news --ack`), by their feed id. |
 | `aur-maintainers.json` | The maintainer of each foreign package when it was last up to date; a change holds its update for you. |
 | `quiet-waiting.json` | Since when the timer's run has been waiting for a quiet machine. |
 | `keep/` | Pre-update records `auto-<time>/`, unless `keep` is set. |
@@ -1073,6 +1131,8 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `~/.local/bin/arch-update`, `~/.local/share/arch-update-deck/`, `~/.local/share/applications/arch-update.desktop` | The installation. The desktop entry starts `arch-update` in a terminal, so it opens Update Day. |
 | `/etc/default/grub.arch-updater-<time>.bak` | Backup made by each kernel selection. |
 | `~/.cache/yay/<name>.quarantine-<run id>` | Cache directories set aside by `quarantine-aur-cache`. |
+
+Every file above that the tool rewrites in place (state files such as `aur-maintainers.json`, `ask-result.json`, `news-seen.json`, `dotfiles.json`) is written to a temporary file, flushed to disk and renamed over the old one, so a power cut leaves the old content or the new one and never half of it.
 
 Nothing removes these on its own: `runs/` (every update and every
 `auto --dry-run`; opening Update Day writes none), `briefs/`, `drift/`, `ask-window.log`, the `grub.arch-updater-*.bak`

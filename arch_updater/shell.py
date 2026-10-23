@@ -179,10 +179,21 @@ class Shell:
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
 
-    def post(self, url: str, fields: list[tuple[str, str]]) -> Any:
-        """POST a form to an https API and return its JSON answer."""
+    @staticmethod
+    def _open(url: str, data: bytes | None = None, timeout: float = 30):
         if not url.startswith("https://"):
             raise ValueError(f"refusing a non-https URL: {url}")
-        data = urllib.parse.urlencode(fields).encode()
-        with urllib.request.urlopen(url, data=data, timeout=30) as response:  # noqa: S310 - https checked above
+        return urllib.request.urlopen(url, data=data, timeout=timeout)  # noqa: S310 - https checked above
+
+    def get(self, url: str, limit: int = 1 << 20, timeout: float = 30) -> str:
+        """GET an https page and return its text; an answer longer than `limit` bytes is refused, not cut."""
+        with self._open(url, timeout=timeout) as response:
+            body = response.read(limit + 1)
+        if len(body) > limit:
+            raise ValueError(f"{url} answered more than {limit} bytes")
+        return body.decode("utf-8", errors="replace")
+
+    def post(self, url: str, fields: list[tuple[str, str]]) -> Any:
+        """POST a form to an https API and return its JSON answer."""
+        with self._open(url, urllib.parse.urlencode(fields).encode()) as response:
             return json.load(response)

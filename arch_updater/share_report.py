@@ -6,6 +6,7 @@ import re
 from dataclasses import asdict
 from typing import Any
 
+from . import atomic
 from .textsafe import clean
 
 SCHEMA = "arch-update-share/v1"
@@ -52,8 +53,7 @@ def mark_sent(cases: list[Any], state_root: Any) -> None:
     import json
 
     path = state_root / SENT
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(sorted(_sent(state_root) | {case.id for case in cases})), encoding="utf-8")
+    atomic.write(path, json.dumps(sorted(_sent(state_root) | {case.id for case in cases})))
 
 
 def _offers(cases: list[Any], state_root: Any, config: dict | None, proved: Any) -> tuple[set[str], list[tuple[Any, str]]]:
@@ -97,8 +97,7 @@ def should_offer(cases: list[Any], state_root: Any, config: dict | None = None, 
     offered, owed = _offers(cases, state_root, config, proved)
     if owed:
         path = state_root / OFFERED
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(sorted(offered | {name for _, name in owed})), encoding="utf-8")
+        atomic.write(path, json.dumps(sorted(offered | {name for _, name in owed})))
     return [case for case, _ in owed]
 
 

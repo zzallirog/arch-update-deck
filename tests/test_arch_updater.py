@@ -196,7 +196,7 @@ def test_help_lists_the_commands_in_order_one_plain_line_each_and_none_of_the_ol
     text = capsys.readouterr().out
     assert "==SUPPRESS==" not in text
     listed = re.findall(r"^    (\S+)\s{2,}\S", text, re.MULTILINE)
-    assert listed == ["status", "kernel", "attest", "auto", "schedule", "patrol", "share-report", "dotfiles", "brief", "learn", "census", "vault", "cve", "scan-sessions"]
+    assert listed == ["status", "kernel", "attest", "auto", "schedule", "patrol", "share-report", "dotfiles", "brief", "learn", "census", "vault", "cve", "news", "scan-sessions"]
     for gone in ("menu", "preview", "snapshot-json", "search", "plan", "run"):
         with pytest.raises(SystemExit):
             main([gone])
@@ -310,3 +310,31 @@ def test_readme_status_line_names_the_current_version() -> None:
 
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
     assert f"Version {__version__}." in readme
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ("error: foo: signature from \"A B <a@b.c>\" is unknown trust\n:: File /var/cache/pacman/pkg/foo.pkg.tar.zst is corrupted (invalid or corrupted package (PGP signature)).", "PGP-SIGNATURE-INVALID"),
+        ("error: key \"0123ABCD\" could not be looked up remotely", "PGP-SIGNATURE-INVALID"),
+        ("error: foo: signature from \"X\" is invalid", "PGP-SIGNATURE-INVALID"),
+        ("error: failed to commit transaction (invalid or corrupted package (checksum))", "PACKAGE-ARCHIVE-CORRUPT"),
+        ("error: command failed to execute correctly", "POST-TRANSACTION-HOOK-FAILED"),
+        ("warning: hook mkinitcpio failed", "POST-TRANSACTION-HOOK-FAILED"),
+        ("error: failed to prepare transaction (could not satisfy dependencies)\n:: installing a (2) breaks dependency 'a=1' required by b", "UNSATISFIED-DEPENDENCIES"),
+        ("error: target not found: nosuchpkg", "TARGET-NOT-FOUND"),
+        ("error: could not open file /var/lib/pacman/local/x: Read-only file system", "READ-ONLY-FILESYSTEM"),
+    ],
+)
+def test_pacman_failures_taken_from_a_sibling_manager_are_named(output: str, expected: str) -> None:
+    assert expected in {item["id"] for item in classify_failures(output)}
+
+
+def test_a_bad_signature_is_not_also_called_a_corrupt_download() -> None:
+    ids = {item["id"] for item in classify_failures("error: foo: signature from \"A\" is invalid (invalid or corrupted package (PGP signature))")}
+    assert "PGP-SIGNATURE-INVALID" in ids and "PACKAGE-ARCHIVE-CORRUPT" not in ids
+
+
+def test_a_missing_mirror_file_is_not_a_missing_package() -> None:
+    ids = {item["id"] for item in classify_failures("error: failed retrieving file 'x.pkg.tar.zst' from mirror: The requested URL returned error: 404")}
+    assert ids == {"MIRROR-STALE-404"}

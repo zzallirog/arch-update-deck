@@ -16,7 +16,7 @@ turn it on). Any other key changes nothing.
 
  TOTAL    1 from repositories · 1 from AUR (by hand: yay -Sua)
 
- MACHINE  fine · 8 checks
+ MACHINE  fine · 9 checks
  PENDING  nothing since last time
 
  UPDATE NOW?  [y] yes   [N] not now   Enter means no
@@ -137,7 +137,7 @@ configuration and says so under `PENDING`. That is the whole first update.
 | State: runs, briefs, census, the pre-update record | `~/.local/state/arch-updater/` |
 | The sudoers rules, once you install them | `/etc/sudoers.d/zzz-arch-update-auto` |
 
-Version 0.20.02. Written for one machine first; expect rough edges, and send
+Version 0.20.03. Written for one machine first; expect rough edges, and send
 them in. [docs/REFERENCE.md](docs/REFERENCE.md) has every command, key, exit
 status, configuration key and file.
 

@@ -62,7 +62,7 @@ def failure_evidence(text: str) -> tuple[list[str], list[str]]:
     if FAILURE_VAULT.exists():
         with FAILURE_VAULT.open(encoding="utf-8") as handle:
             for mode in json.load(handle).get("modes", []):
-                if re.search(mode["match"], text):
+                if mode.get("classify_output") is not False and re.search(mode["match"], text):
                     modes.append(mode["id"])
     signal_pattern = re.compile(
         r"(?i)(error|failed|failure|warning|are in conflict|conflicting dependencies|not found|not available|password is required|unknown download protocol)"

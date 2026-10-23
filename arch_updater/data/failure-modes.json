@@ -23,6 +23,66 @@
       "origin": "official"
     },
     {
+      "id": "PGP-SIGNATURE-INVALID",
+      "match": "(?i)(invalid or corrupted package \\(pgp signature\\)|signature from .* is (invalid|unknown trust|marginal)|required key missing from keyring|public key is not available|could not be (looked up remotely|locally signed)|key .* (is unknown|has expired|was revoked|is disabled))",
+      "stage": "repo-update",
+      "meaning": "pacman rejected a package because its signature is bad, its key is missing, expired or revoked, or the key is not trusted.",
+      "response": "Do not retry the same transaction and never turn signature checking off. A missing or expired key usually means the keyring package is older than the packages being installed: refresh archlinux-keyring first (this alone is the supported order), then run the update again. A signature that stays invalid after that points at a damaged download or a bad mirror, so clear that one cached file and try another mirror.",
+      "automatic": false,
+      "fix": "sudo pacman -Sy --needed archlinux-keyring",
+      "origin": "official"
+    },
+    {
+      "id": "PACKAGE-ARCHIVE-CORRUPT",
+      "match": "(?i)(invalid or corrupted package \\(checksum\\)|is not a valid or corrupted package|\\.pkg\\.tar\\S* is corrupted)",
+      "stage": "repo-download",
+      "meaning": "A downloaded package file does not match what the database promised: a cut-off download, a stale cache entry or a damaged mirror copy.",
+      "response": "Remove only the named file from the package cache, then run the update again so pacman fetches it afresh. If it fails the same way, the mirror is serving a bad copy: wait for the mirror or change it.",
+      "automatic": false,
+      "fix": "grep -h \"corrupted\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 3",
+      "origin": "official"
+    },
+    {
+      "id": "POST-TRANSACTION-HOOK-FAILED",
+      "match": "(?i)(error: command failed to execute correctly|warning: hook .* failed|error: failed to run .* hook)",
+      "stage": "repo-update",
+      "meaning": "The packages were installed, but a pacman hook that runs afterwards (initramfs, fonts, desktop database, kernel modules) failed. pacman itself still exits successfully.",
+      "response": "Treat the run as not clean: the hook's work is missing. Read which hook it was, fix its cause, then re-run that one step by hand. A failed initramfs or module hook can leave the next boot broken, so check before rebooting.",
+      "automatic": false,
+      "fix": "grep -B4 \"command failed to execute correctly\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 12",
+      "origin": "official"
+    },
+    {
+      "id": "UNSATISFIED-DEPENDENCIES",
+      "match": "(?i)(could not satisfy dependencies|unable to satisfy dependency|breaks dependency)",
+      "stage": "repo-update",
+      "meaning": "A package needs a version of another package that the repositories do not offer together: a partial upgrade, a held or ignored package, or a repository that is mid-rebuild.",
+      "response": "Name the package that breaks the dependency (the fix prints the lines), check IgnorePkg and HoldPkg in pacman.conf, and wait a day if the repositories are mid-rebuild. Never force the install past a broken dependency.",
+      "automatic": false,
+      "fix": "grep -hE \"breaks dependency|unable to satisfy|could not satisfy\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 5",
+      "origin": "official"
+    },
+    {
+      "id": "TARGET-NOT-FOUND",
+      "match": "(?i)(error: target not found|error: failed to prepare transaction \\(could not find or read package\\))",
+      "stage": "repo-update",
+      "meaning": "pacman was asked for a package that no enabled repository has: renamed, dropped, or the sync database is out of date.",
+      "response": "Look the name up with pacman -Ss. A renamed package needs the new name; a dropped one may live in the AUR. Do not guess a replacement.",
+      "automatic": false,
+      "fix": "grep -h \"target not found\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 3",
+      "origin": "official"
+    },
+    {
+      "id": "READ-ONLY-FILESYSTEM",
+      "match": "(?i)(read-only file system|cannot open .* read-only)",
+      "stage": "preflight",
+      "meaning": "A filesystem the update must write to has been remounted read-only, usually by the kernel after an I/O error.",
+      "response": "Stop. Do not remount it read-write to push the update through: a disk that went read-only after an error needs its logs read first.",
+      "automatic": false,
+      "fix": "findmnt -O ro -t ext4,btrfs,xfs,f2fs; dmesg | tail -n 20",
+      "origin": "official"
+    },
+    {
       "id": "MIRROR-STALE-404",
       "match": "(?i)(failed retrieving file.*404|requested URL returned error: 404)",
       "stage": "repo-download",
@@ -342,6 +402,17 @@
       "response": "The repository stays on the new release. The brief holds the installer's telling lines and says how to save the fix that works, so the next run replays it.",
       "automatic": false,
       "fix": "arch-update brief",
+      "origin": "official"
+    },
+    {
+      "id": "ARCH-NEWS-MANUAL",
+      "match": "",
+      "classify_output": false,
+      "stage": "watch",
+      "meaning": "An Arch Linux news post asks for a step by hand before upgrading, and nobody has marked it read.",
+      "response": "The unattended run does not start until a person has read the post and done what it says. A news feed that cannot be fetched does not stop anything.",
+      "automatic": false,
+      "fix": "arch-update news",
       "origin": "official"
     }
   ]

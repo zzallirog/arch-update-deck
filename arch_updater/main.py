@@ -11,10 +11,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__, aur_handoff, auto, briefs, day, discover
+from . import __version__, aur_handoff, auto, briefs, day, discover, news
 from .auto import init_config, run_auto, status, sudoers_rules
 from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
+from .shell import Shell
 from .scheduler import AUTO_UNIT, is_due, PATROL_UNIT, auto_status, remove_timer, install_daily_patrol_timer, install_weekly_auto_timer, last_patrol_report, run_patrol, scheduler_status
 from .census import load as census_cases
 from .share_report import issue_url, mark, mark_sent, pending_offers, sanitize_patrol_report, share_census, should_offer, unsent
@@ -185,6 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
     vault_parser = subparsers.add_parser("vault", help="Show the known failures, or name the ones in a piece of output")
     vault_parser.add_argument("--classify")
     subparsers.add_parser("cve", help="Scan installed packages against the Arch security tracker")
+    news_parser = subparsers.add_parser("news", help="Arch news that asks for a manual step before an upgrade; the weekly run waits for it")
+    news_parser.add_argument("--ack", action="store_true", help="Mark what is listed as read, so the weekly run goes on")
     scan_parser = subparsers.add_parser("scan-sessions", help="Find update sessions in raw transcripts")
     scan_parser.add_argument("--output-dir", type=Path, default=STATE_ROOT / "reports")
     scan_parser.add_argument("--json", action="store_true")
@@ -271,6 +274,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if command == "cve":
             _json(scan_cves())
+            return 0
+        if command == "news":
+            posts = news.waiting(Shell(), STATE_ROOT)
+            for post in posts:
+                print(f"{post.title}\n  {post.link}")
+            if not posts:
+                print("no manual-step news waiting")
+            if args.ack and posts:
+                news.acknowledge(posts, STATE_ROOT)
+                print("marked as read: the weekly run goes on")
             return 0
         if command == "schedule":
             if args.install_auto:

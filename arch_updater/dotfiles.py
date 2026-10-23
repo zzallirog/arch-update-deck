@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import atomic
 from . import census, syntax
 from . import drift as drifts
 from .engine import STATE_ROOT
@@ -71,7 +72,7 @@ def visited(repo: Repo, state_root: Path) -> None:
     except (OSError, ValueError):
         seen = {}
     seen[str(repo.path)] = time.time()
-    path.write_text(json.dumps(seen, indent=1, sort_keys=True), encoding="utf-8")
+    atomic.write(path, json.dumps(seen, indent=1, sort_keys=True))
 
 
 @dataclass(frozen=True)

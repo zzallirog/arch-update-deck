@@ -66,4 +66,12 @@ def private_home(tmp_path, monkeypatch):
             monkeypatch.setattr(module, "HISTORY_PATH", state / "patrol-history.json")
         if name == "arch_updater.auto":  # the machine's own config; engine.CONFIG_PATH is the shipped profile list
             monkeypatch.setattr(module, "CONFIG_PATH", home / ".config/arch-updater/auto.json")
+    # No test may reach the network either: the news feed is read before every run, and a fake shell that inherits
+    # the real `get` would ask archlinux.org on every test. A test that wants a feed gives its shell its own `get`.
+    from arch_updater.shell import Shell
+
+    def offline(self, url, limit=1 << 20, timeout=30):
+        raise OSError("tests are offline")
+
+    monkeypatch.setattr(Shell, "get", offline)
     yield home

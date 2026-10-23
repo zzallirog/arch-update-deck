@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import exits, home, repairs
-from .engine import SOFT_FREE_BYTES, attest, snapshot
+from . import exits, home, news, repairs
+from .engine import SOFT_FREE_BYTES, STATE_ROOT, attest, snapshot
 from .shell import Shell
 
 
@@ -129,6 +129,18 @@ def probe_dns(scene: Scene) -> Reading:
     return passed("dns")
 
 
+def probe_news(scene: Scene) -> Reading:
+    """Arch news that asks for a manual step stops an unattended run until `arch-update news --ack`. A dead feed stops nothing."""
+    try:
+        posts = news.waiting(scene.sh, STATE_ROOT)
+    except (OSError, ValueError) as exc:
+        return passed("news", f"not read: {exc}")
+    if not posts:
+        return passed("news")
+    detail = "; ".join(f"{post.title} ({post.link})" for post in posts)
+    return Reading([Verdict("news", "blocked", "ARCH-NEWS-MANUAL", f"{detail}; read it, then arch-update news --ack", exits.BLOCKED)])
+
+
 def probe_database(scene: Scene) -> Reading:
     check = scene.sh.capture(["pacman", "-Dk"], timeout=120)
     if check.returncode != 0:
@@ -170,6 +182,7 @@ PROBES: tuple[Callable[[Scene], Reading], ...] = (
     probe_lock,
     probe_disk,
     probe_dns,
+    probe_news,
     probe_database,
     probe_machine,
     probe_smoke,
@@ -177,7 +190,7 @@ PROBES: tuple[Callable[[Scene], Reading], ...] = (
 
 
 # What stops a run before it changes anything, with nobody needed to say so: the timer reads these before it opens a window.
-GATES: tuple[Callable[[Scene], Reading], ...] = (probe_conditions, probe_keep)
+GATES: tuple[Callable[[Scene], Reading], ...] = (probe_conditions, probe_keep, probe_news)
 
 
 def held(scene: Scene, probes: tuple[Callable[[Scene], Reading], ...] = GATES) -> Verdict | None:

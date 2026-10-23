@@ -249,7 +249,7 @@ def test_a_broken_probe_does_not_silence_the_others(box) -> None:
     report = box.run(dry_run=True)
     statuses = {verdict["probe"]: verdict["status"] for verdict in report["verdicts"]}
     assert statuses.pop("broken") == "unknown"
-    assert set(statuses) == {"privilege", "keep", "lock", "disk", "dns", "database", "machine", "smoke"}
+    assert set(statuses) == {"privilege", "keep", "lock", "disk", "dns", "news", "database", "machine", "smoke"}
     assert set(statuses.values()) == {"pass"}
     assert report["out"] == 0, "unknown is never green"
 
@@ -748,7 +748,8 @@ def test_the_weekly_unit_runs_this_launcher_and_spares_the_package_manager(tmp_p
     assert "ExecStart=/opt/deck/bin/arch-update auto --scheduled\n" in service
     assert "KillMode=mixed\n" in service and "SuccessExitStatus=10 80\n" in service
     timer = (tmp_path / "arch-update-auto.timer").read_text()
-    assert "OnStartupSec=3min\n" in timer and "OnCalendar" not in timer
+    assert "OnActiveSec=3min\n" in timer and "OnCalendar" not in timer and "OnStartupSec" not in timer
+    assert "WantedBy=graphical-session.target\n" in timer and "PartOf=graphical-session.target\n" in timer, "a login, not the boot a lingering user manager starts at"
     assert "ExecCondition=/opt/deck/bin/arch-update auto --due\n" in service
 
 
