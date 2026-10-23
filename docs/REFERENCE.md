@@ -16,6 +16,7 @@ By what each program is used for.
 | Update Day, patrol, `status`, the disk check's sizes | `checkupdates` (package `pacman-contrib`; it also needs `fakeroot`) | The repository queue is shown as unread (`cannot read the repositories: install pacman-contrib`; in `status`, `?`), and the disk check only checks the 6 GiB on `/`. Update Day then asks no question, because `y` would update blind; `arch-update auto` still runs. |
 | Low-space repair | `paccache` (`pacman-contrib`) | No cleanup. The sudoers rule for it is not generated. |
 | `.pacnew` listing | `pacdiff` (`pacman-contrib`) | No `.pacnew` files are listed. |
+| Deleting a `.pacnew` identical to its live file | The shim `/usr/local/libexec/arch-update-pacnew-prune` and its sudoers rule (see [.pacnew files](#pacnew-files)) | It is listed with `sudo rm <file>` as the command for you. |
 | Timers | `systemd --user`, `systemctl` | `schedule` cannot install the timers. |
 | Weekly run while logged out | Lingering: `loginctl enable-linger` | The user manager, and with it the timer, runs only while you are logged in. |
 | AUR | `yay` or `paru`: the first one installed lists the waiting packages (Update Day, `status`, patrol) and, with `unattended_aur`, builds them; an unattended build uses `yay` only, and needs the root shim | No AUR rows, no AUR updates. See [AUR](../README.md#aur). |
@@ -143,7 +144,11 @@ is written.
    cause is the last line of the command's output that has words in it, not the
    `[exit N]` line the log adds; `AUR waits for you; by hand: yay -Sua`
    if the AUR was held; a line for each package changed in the AUR too recently;
-   `new config version: <file>  compare: sudo pacdiff` for each `.pacnew`; and
+   one line for each `.pacnew` by its state (see [.pacnew files](#pacnew-files):
+   `removed, identical to the live file: <file>`, `new config version,
+   identical: <file>  remove: sudo rm <file>`, a red `new config version with
+   no live file: <file>  look: sudo pacdiff`, or `new config version: <file>
+   compare: sudo pacdiff`); and
    the lines of [Restarts after an update](#restarts-after-an-update)
    (`restart by hand: ...`, `still running replaced files, close and start
    again: ...`, `reboot needed: ...`, and a dim `system services not looked
@@ -249,6 +254,11 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
 
 ### Changed in 0.20.04
 
+- A `.pacnew` identical to its live file is deleted after the update, through
+  a new shim (`arch-update-pacnew-prune`, no arguments, its own sudoers rule):
+  the only file the tool deletes on its own, each one in the report. A
+  `.pacnew` with no live file is a warning; the others are listed as before.
+  See [.pacnew files](#pacnew-files).
 - After a run that changed repository or AUR packages, the processes that still
   run a library or program the update replaced are listed: the system and user
   services to restart (with the `systemctl` command, which you run), the other
@@ -376,9 +386,13 @@ in the profile file. `arch-update` with no command opens Update Day instead.
   service or a program. The list of what runs replaced code (see
   [Restarts after an update](#restarts-after-an-update)) is read from `/proc`
   and printed with the commands for you to run.
-- `.pacnew` and `.pacsave` files are listed with `pacdiff -o`. The result screen
-  and `auto --status` print `sudo pacdiff` as the command for you to run. No
-  code reads or writes them.
+- `.pacnew` and `.pacsave` files are listed with `pacdiff -o`, and each
+  `.pacnew` is compared with its live file. The one file this tool deletes on
+  its own is a `.pacnew` under `/etc` that is byte for byte its live file, and
+  only through the shim you install for it; each deletion is in the report
+  (`pacnew_removed`). No code merges, edits or moves a `.pacnew` or
+  `.pacsave`; the result screen and `auto --status` print `sudo pacdiff` for
+  the rest. See [.pacnew files](#pacnew-files).
 - The pacman lock is only tested with `Path.exists()`. A lock left by a killed
   package manager is waited on (up to three times two minutes) and never
   removed; the run exits 30.
@@ -457,6 +471,50 @@ update and exits 30. The same check and the same cleanup apply to `y` on Update
 Day and to the unattended run. The patrol does not check free space.
 `ROOT-SPACE-LOW` is also the case for a pacman error such as `No space left on
 device`.
+
+## .pacnew files
+
+After the update (the closing look, which runs `pacdiff -o`), each `.pacnew` is
+given a state by comparing it with its live file, the same path without
+`.pacnew` (`arch_updater/pacnew.py`):
+
+| State | Means | What happens |
+|---|---|---|
+| `identical` | the same bytes as the live file: there is nothing to merge | deleted by the shim, if it is installed; otherwise listed with `sudo rm <file>` |
+| `original_missing` | no live file beside it | a warning: listed in red on the screen and in `auto --status` with `sudo pacdiff`; nothing else is done |
+| `different` | a merge for a person | listed with `sudo pacdiff`, as before |
+| `unreadable` | your account may not read one of the two (a file only uid 0 reads) | handed to the shim, which reads both; left listed if it is not identical |
+| `pacsave` | a `.pacsave` | listed, never touched |
+
+The deletion needs uid 0, so it goes through a shim that sudo runs with no
+arguments, like the AUR shim: `arch_updater/pacnew_prune.py`, installed as
+`/usr/local/libexec/arch-update-pacnew-prune`:
+
+```bash
+sudo install -D -o 0 -g 0 -m 0755 ~/.local/share/arch-update-deck/arch_updater/pacnew_prune.py /usr/local/libexec/arch-update-pacnew-prune
+```
+
+With it installed, `arch-update auto --sudoers` adds the rule
+`<user> ALL=(root) NOPASSWD: /usr/local/libexec/arch-update-pacnew-prune ""`
+(install the rules again as their `fix` says). Without the shim, or with one
+whose bytes differ from this release's `pacnew_prune.py` (it is then not run,
+and `pacnew_not_pruned` says to reinstall it), identical files stay listed.
+
+The shim reads nothing from its arguments or environment. It walks `/etc`
+without following any link and deletes a file only when all of this holds: its
+name ends in `.pacnew` (and is more than that); it is a regular file, not a
+link; beside it is a regular file, not a link, with the name without `.pacnew`;
+both are opened without following a link and have the same bytes; their folder
+is not a link, is owned by uid 0 and is writable by nobody else. It prints
+`removed <file>` for each deletion; the run records exactly those lines that
+name a file under `/etc`, whether `pacdiff` listed it or not. Nothing outside
+`/etc`, no `.pacsave`, and no file that differs by a byte is ever removed.
+
+`report.json` keeps `pacnew` (what is still there), `pacnew_states` (the state
+of each), `pacnew_removed` (what this run deleted) and `pacnew_not_pruned`
+(why identical ones are left, `""` otherwise). A dry run reads the states and
+deletes nothing. The notification adds `removed N .pacnew identical to the
+live file`.
 
 ## Restarts after an update
 
@@ -585,6 +643,11 @@ A full set, on a machine with `pacman`, `paccache`, `mkinitcpio` and `dkms`
 <user> ALL=(root) NOPASSWD: /usr/bin/mkinitcpio -P
 <user> ALL=(root) NOPASSWD: /usr/bin/dkms autoinstall
 ```
+
+With the `.pacnew` shim installed (see [.pacnew files](#pacnew-files)) one
+more line follows, taking no arguments:
+`<user> ALL=(root) NOPASSWD: /usr/local/libexec/arch-update-pacnew-prune ""`;
+without it the output has `# skipped arch-update-pacnew-prune: ...`.
 
 The rules go in `/etc/sudoers.d/zzz-arch-update-auto`. sudo applies the last
 matching rule, so the file must sort after the rule that grants the user all
@@ -1202,7 +1265,7 @@ State directory: `~/.local/state/arch-updater/`, or `$ARCH_UPDATER_STATE`.
 | `~/.config/arch-updater/auto.json` | Configuration. |
 | `runs/auto-<time>/run.log` | Output of the commands the update executed through its command wrapper: the store updates, repairs, the `tar` of `/etc`. The probes (`sudo -n true`, `pacman -Dk`, package listings, `checkupdates`) are not logged. |
 | `runs/auto-<time>/tokens.jsonl` | Check results, repairs and control-flow events. |
-| `runs/auto-<time>/report.json` | Result of the run: `run_id`, `started_at`, `finished_at`, `dry_run`, `out`, `exit_code`, `signal` and `child_stopped` (set only when a signal ended the run, otherwise `null`), `state`, `looks`, `crash`, `trouble`, `verdicts`, `updated`, `held`, `offers`, `learned_unshared` (how many learned fixes this run's notice offered to share), `self_fixed` (the learned cases that repaired a failure in this run), `repairs`, `pacnew`, `reboot_required`, `restart` (see [Restarts after an update](#restarts-after-an-update)), `wrote` (the run directory), and a `cve` block with the `arch-audit` findings (they never change the exit status). |
+| `runs/auto-<time>/report.json` | Result of the run: `run_id`, `started_at`, `finished_at`, `dry_run`, `out`, `exit_code`, `signal` and `child_stopped` (set only when a signal ended the run, otherwise `null`), `state`, `looks`, `crash`, `trouble`, `verdicts`, `updated`, `held`, `offers`, `learned_unshared` (how many learned fixes this run's notice offered to share), `self_fixed` (the learned cases that repaired a failure in this run), `repairs`, `pacnew`, `pacnew_states`, `pacnew_removed`, `pacnew_not_pruned` (see [.pacnew files](#pacnew-files)), `reboot_required`, `restart` (see [Restarts after an update](#restarts-after-an-update)), `wrote` (the run directory), and a `cve` block with the `arch-audit` findings (they never change the exit status). |
 | `runs/kernel-<time>/run.log` | Kernel selection. |
 | `last-auto.json` | `report.json` of the last update that was not a dry run, an interrupted one included. Source of `PENDING` and of the `l` key. A run that stopped at a check has this report but no `run.log`. |
 | `last-patrol.json`, `patrol-history.json` | The last patrol, and a summary of the last 12. |

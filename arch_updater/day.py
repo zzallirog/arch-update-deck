@@ -402,7 +402,16 @@ def summary(report: dict[str, Any], changes: list[Row] = ()) -> tuple[str, list[
         lines.append(ink(GREY, f"changed in AUR too recently, held this week: {', '.join(held['aur_too_fresh'])}"))
     for line in held.get("aur_by_hand") or []:  # "name: reason", built from the AUR's answer
         lines.append(f"{ink(GREY, 'AUR by hand, ')}{ink(WHITE, clean(line))}")
-    lines += [f"{ink(GREY, 'new config version: ')}{ink(WHITE, path)}{ink(GREY, '  compare: sudo pacdiff')}" for path in report.get("pacnew") or []]
+    lines += [f"{ink(GREY, 'removed, identical to the live file: ')}{ink(WHITE, clean(path))}" for path in report.get("pacnew_removed") or []]
+    kinds = report.get("pacnew_states") or {}
+    for path in report.get("pacnew") or []:
+        kind, shown = kinds.get(path, "different"), clean(path)
+        if kind == "identical":
+            lines.append(f"{ink(GREY, 'new config version, identical: ')}{ink(WHITE, shown)}{ink(GREY, f'  remove: sudo rm {shown}')}")
+        elif kind == "original_missing":
+            lines.append(f"{ink(RED, 'new config version with no live file: ')}{ink(WHITE, shown)}{ink(GREY, '  look: sudo pacdiff')}")
+        else:
+            lines.append(f"{ink(GREY, 'new config version: ')}{ink(WHITE, shown)}{ink(GREY, '  compare: sudo pacdiff')}")
     found = report.get("restart") or {}
     lines += [f"{ink(GREY, 'restart by hand: ')}{ink(WHITE, clean(command))}" for command in restarts.commands(found)]
     if found.get("programs"):
