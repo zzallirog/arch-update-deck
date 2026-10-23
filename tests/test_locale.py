@@ -47,5 +47,5 @@ def test_a_failure_in_another_language_would_not_be_recognised_so_the_store_is_r
     """Why it matters: the catalogue reads pacman's English words; the same failure in Russian is an unseen case."""
     cases = census.load(tmp_path)
     assert census.recognise(cases, "error: failed to synchronize: unable to lock database").id == "PACMAN-LOCK"
-    assert census.recognise(cases, "ошибка: не удалось синхронизировать: не удалось заблокировать базу данных") is None
+    assert census.recognise(cases, "\u043e\u0448\u0438\u0431\u043a\u0430: \u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u0438\u043d\u0445\u0440\u043e\u043d\u0438\u0437\u0438\u0440\u043e\u0432\u0430\u0442\u044c: \u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0431\u0430\u0437\u0443 \u0434\u0430\u043d\u043d\u044b\u0445") is None
     assert {"pacman", "yay", "paru", "checkupdates", "pacdiff"} <= engine.C_LOCALE

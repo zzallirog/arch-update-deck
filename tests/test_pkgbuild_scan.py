@@ -14,7 +14,7 @@ CLEAN = """# Maintainer: Someone <someone at example dot org>
 pkgname=hello
 pkgver=1.2
 pkgrel=1
-pkgdesc="Says hello — Говорит привет"
+pkgdesc="Says hello — \u0413\u043e\u0432\u043e\u0440\u0438\u0442 \u043f\u0440\u0438\u0432\u0435\u0442"
 arch=('x86_64')
 url="https://example.org/hello"
 depends=('glibc' 'curl')
@@ -140,7 +140,7 @@ def test_substitutions_inside_functions_and_arithmetic_do_not_bite(text) -> None
     assert flags(text) == []
 
 
-@pytest.mark.parametrize("char", ["​", "‮", "⁦", "﻿", "­"])
+@pytest.mark.parametrize("char", ["\u200b", "\u202e", "\u2066", "\ufeff", "\u00ad"])
 def test_an_invisible_character_anywhere_bites(char) -> None:
     found = flags(f"pkgdesc='hello{char} world'\n")
     assert len(found) == 1 and "invisible character" in found[0] and f"U+{ord(char):04X}" in found[0]
@@ -149,12 +149,12 @@ def test_an_invisible_character_anywhere_bites(char) -> None:
 @pytest.mark.parametrize(
     "line",
     [
-        "pkgname=pаcman",  # a Cyrillic а in a Latin name
-        "depends=('glibc' 'opеnssl')",
-        "url='https://еxample.org'",
-        "source=('https://example.org/x.tar.gz' 'ѕetup.sh')",
-        "optdepends=('wɡet: downloads')",
-        "provides=('ｃurl')",  # a full-width letter
+        "pkgname=p\u0430cman",  # a Cyrillic \u0430 in a Latin name
+        "depends=('glibc' 'op\u0435nssl')",
+        "url='https://\u0435xample.org'",
+        "source=('https://example.org/x.tar.gz' '\u0455etup.sh')",
+        "optdepends=('w\u0261et: downloads')",
+        "provides=('\uff43url')",  # a full-width letter
     ],
 )
 def test_a_name_with_a_letter_from_another_alphabet_bites(line) -> None:
@@ -163,7 +163,7 @@ def test_a_name_with_a_letter_from_another_alphabet_bites(line) -> None:
 
 
 def test_descriptions_in_any_language_do_not_bite() -> None:
-    assert flags("pkgdesc='Программа — für alle'\noptdepends=('python: скрипты на питоне')\n") == []
+    assert flags("pkgdesc='\u041f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0430 — für alle'\noptdepends=('python: \u0441\u043a\u0440\u0438\u043f\u0442\u044b \u043d\u0430 \u043f\u0438\u0442\u043e\u043d\u0435')\n") == []
 
 
 def test_a_flag_names_its_file_and_line() -> None:

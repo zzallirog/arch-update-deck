@@ -42,7 +42,7 @@ COMMAND = {
     "eval": re.compile(_START + r"(eval)" + _END, re.MULTILINE),
 }
 DECODE = re.compile(r"\b(base64\b[^\n]*?\s(?:-[A-Za-z]*d[A-Za-z]*|--decode|-D)\b|xxd\b[^\n]*?\s-r\b|openssl\b[^\n]*?\bbase64\b[^\n]*?\s-d\b|openssl\b[^\n]*?\s-d\b[^\n]*?\bbase64\b)")
-INVISIBLE = re.compile("[­​-‏‪-‮⁠-⁤⁦-⁩﻿]")
+INVISIBLE = re.compile("[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
 NAME_FIELDS = ("pkgname", "pkgbase", "depends", "makedepends", "checkdepends", "optdepends", "provides", "conflicts", "replaces", "source", "url", "install")
 _FIELD = re.compile(r"^[ \t]*(" + "|".join(NAME_FIELDS) + r")(?:_\w+)?\+?=(\([^)]*\)|\"[^\"\n]*\"|'[^'\n]*'|[^\s;]*)", re.MULTILINE)
 _SCALAR = re.compile(r"^(\w+)=(\"[^\"$`\n]*\"|'[^'\n]*'|[^\s\"'$`();]+)\s*$", re.MULTILINE)

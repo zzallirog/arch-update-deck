@@ -650,7 +650,7 @@ the result block of Update Day prints the same.
   | hidden code: `eval`, or decoding with `base64 -d`, `xxd -r`, `openssl … base64 -d` | `base64 -d blob > x` |
   | a command substitution (`$(…)`, backticks; not `$((…))`) outside every function, which runs as soon as the file is read | `pkgver=$(date +%s)` at the top |
   | an invisible character anywhere (zero width, direction override, soft hyphen) | `U+202E` |
-  | a character that is not ASCII in `pkgname`, `pkgbase`, `depends` and the other relation arrays, `source`, `url`, `install`, or in the name part of `optdepends` | a Cyrillic `а` in `pаcman` |
+  | a character that is not ASCII in `pkgname`, `pkgbase`, `depends` and the other relation arrays, `source`, `url`, `install`, or in the name part of `optdepends` | `pacman` written with a Cyrillic a (U+0430) |
   | a local source that is binary: an ELF program, or a file with a NUL byte | a shipped executable |
 
   A tool only named (in `depends`, a comment, a quoted message, a file name)
