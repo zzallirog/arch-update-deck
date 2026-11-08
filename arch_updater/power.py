@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -58,8 +59,10 @@ class Battery(NamedTuple):
 
 
 def threshold(config: dict[str, Any] | None) -> int:
-    """`min_battery` of auto.json, 0 to 100; anything else is the default (a refusal is the safe side)."""
+    """`min_battery` of auto.json, 0 to 100 (a whole number, or text such as "20" or "20%"); anything else is the default."""
     value = (config or {}).get("min_battery", MIN_BATTERY)
+    if isinstance(value, str) and re.fullmatch(r"\s*\d{1,3}\s*%?\s*", value):
+        value = int(value.strip().rstrip("%"))
     return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100 else MIN_BATTERY
 
 
@@ -95,7 +98,7 @@ def battery(sys_root: Path | None = None) -> Battery:
         charges[supply.name] = (status == "Discharging", percent)
     if not charges:
         return Battery(False, False, None)
-    on_battery = any(discharging for discharging, _ in charges.values()) or quiet._on_battery(sys_root)  # noqa: SLF001
+    on_battery = quiet._on_battery(sys_root)  # noqa: SLF001 - one reading for the gate, the check and the question: the battery's own status first
     pool = [percent for discharging, percent in charges.values() if discharging and percent is not None]
     pool = pool or [percent for _, percent in charges.values() if percent is not None]
     return Battery(True, on_battery, min(pool) if pool else None)
