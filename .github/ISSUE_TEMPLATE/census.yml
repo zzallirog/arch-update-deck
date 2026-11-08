@@ -1,0 +1,33 @@
+name: Census
+description: Fixes and failures that arch-update collected on your machine
+title: "Census: "
+labels: ["census"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `arch-update census --share` filled this in. Your home folder, login, host name, URL credentials and
+        Wi-Fi addresses were taken out before it got here. Read the cases below, then press Submit.
+        A maintainer reviews each fix before it ships; nothing here runs on anybody's machine by itself.
+  - type: input
+    id: version
+    attributes:
+      label: arch-update version
+      description: Filled in by the tool.
+    validations:
+      required: false
+  - type: textarea
+    id: cases
+    attributes:
+      label: Cases
+      description: The cases this machine learned or met, as JSON (schema arch-update-census/v1). Edit out anything you want private.
+      render: json
+    validations:
+      required: true
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Before you submit
+      options:
+        - label: I looked at the cases above and they hold nothing I want private.
+          required: true

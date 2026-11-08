@@ -86,7 +86,7 @@ def _case(entry: dict[str, Any]) -> Case:
     return Case(**{key: entry[key] for key in Case.__dataclass_fields__ if key in entry})
 
 
-def load(state_root: Path) -> list[Case]:
+def load(state_root: Path, persist: bool = True) -> list[Case]:
     """Shipped cases first, then the ones this machine added. Position is identity: see token().
 
     The local file is cleaned on the way in: a failure recorded with a pattern from before the signatures lost their
@@ -105,7 +105,7 @@ def load(state_root: Path) -> list[Case]:
                 case.repair = None  # whatever a file says, a witnessed fix is never replayed
         merged = merge(mine)
         cases += merged
-        if [asdict(case) for case in merged] != [asdict(case) for case in mine]:
+        if persist and [asdict(case) for case in merged] != [asdict(case) for case in mine]:
             try:
                 save_local(cases, state_root)
             except OSError:
@@ -343,7 +343,7 @@ def add_witnessed(cases: list[Case], state_root: Path, new: list[Case]) -> list[
 def stats(state_root: Path, cases: list[Case] | None = None, sent: set[str] | None = None) -> dict[str, int]:
     """Six numbers: failures met in runs, how many were a case already known, how many a run fixed by itself, and what
     the census holds: fixes witnessed, fixes learned, cases handed upstream. Read from the runs' reports; writes nothing."""
-    cases = cases if cases is not None else load(state_root)
+    cases = cases if cases is not None else load(state_root, persist=False)  # counting writes nothing
     if sent is None:
         try:
             sent = set(json.loads((state_root / "census-sent.json").read_text(encoding="utf-8")))

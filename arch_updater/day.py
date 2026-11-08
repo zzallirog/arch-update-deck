@@ -31,7 +31,7 @@ from datetime import datetime
 from typing import Any, TextIO
 
 from . import atomic
-from . import auto, exits, home, power, quiet, restarts
+from . import auto, census, exits, home, power, quiet, restarts, share_report
 from .engine import STATE_ROOT, available_kernel_profiles, load_json, read_aur_queue, select_kernel
 from .keepalive import NOTICE as TICKET_EXPIRED, Keepalive
 from .scheduler import AUTO_UNIT
@@ -599,6 +599,14 @@ def _root(sh: Shell, stdin: TextIO, out: TextIO) -> bool:
     return accepted
 
 
+def share_offer(config: dict[str, Any] | None) -> str:
+    """The line under PENDING while the census holds fixes or failures nobody has handed upstream; never an error."""
+    try:
+        return share_report.share_line(census.load(STATE_ROOT), STATE_ROOT, config)
+    except Exception:  # noqa: BLE001 - the offer is a courtesy: Update Day opens without it
+        return ""
+
+
 def ask(
     sh: Shell | None = None,
     stdin: TextIO = sys.stdin,
@@ -639,7 +647,7 @@ def ask(
     # With a person at the terminal the password is asked on yes, so a rule that was missing last time is not pending.
     typed = stdin.isatty() and live and sh.has("sudo") and os.geteuid() != 0
     screen.hanging = [f"{human(item['probe'])} → {item['fix']}" for item in last.get("trouble") or [] if not (typed and item.get("case") in NEEDS_PASSWORD)]
-    screen.notes = [notice] if notice else []
+    screen.notes = [line for line in (notice, share_offer(config)) if line]
     resized = threading.Event()
     main = live and threading.current_thread() is threading.main_thread()
     previous = signal.signal(signal.SIGWINCH, lambda *_: resized.set()) if main else None

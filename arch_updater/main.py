@@ -17,6 +17,7 @@ from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
 from .shell import Shell
 from .scheduler import AUTO_UNIT, is_due, PATROL_UNIT, auto_status, remove_timer, install_daily_patrol_timer, install_weekly_auto_timer, last_patrol_report, run_patrol, scheduler_status
+from . import census
 from .census import load as census_cases
 from .share_report import issue_url, mark, mark_sent, pending_offers, sanitize_patrol_report, share_census, should_offer, unsent
 from .textsafe import clean
@@ -92,6 +93,16 @@ def _open_day() -> int:
         except OSError as exc:
             notice = f"no config yet, and the starter config could not be written: {exc}"
     return day.ask(notice=notice)
+
+
+STATS_LINES = (
+    ("failures", "failures met in unattended runs"),
+    ("recognised", "of them already a known case when met"),
+    ("fixed_by_itself", "fixed by the run itself (a fix learned here, replayed)"),
+    ("witnessed", "fixes seen done by hand (shown, never run)"),
+    ("learned", "fixes learned (replayed by the run)"),
+    ("shared", "cases handed upstream"),
+)
 
 
 def _open_issue(url: str) -> None:
@@ -184,7 +195,8 @@ def build_parser() -> argparse.ArgumentParser:
     learn_parser.add_argument("--yes", action="store_true", help="With --accept: do not ask first (the command removes or installs packages)")
     census_parser = subparsers.add_parser("census", help="What this machine learned; --share hands it upstream so everyone's updates fix themselves")
     census_parser.add_argument("--share", action="store_true", help="Open a GitHub issue with it filled in (home folder and login taken out); you press Submit")
-    census_parser.add_argument("--json", action="store_true", help="With --share: print the JSON instead of opening a page")
+    census_parser.add_argument("--json", action="store_true", help="With --share or --stats: print JSON instead")
+    census_parser.add_argument("--stats", action="store_true", help="Count what the census has collected: failures, how many were known, how many a run fixed by itself, fixes witnessed, learned and shared")
     vault_parser = subparsers.add_parser("vault", help="Show the known failures, or name the ones in a piece of output")
     vault_parser.add_argument("--classify")
     subparsers.add_parser("cve", help="Scan installed packages against the Arch security tracker")
@@ -276,7 +288,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if command == "census":
             cases = census_cases(STATE_ROOT)
-            if args.share and args.json:  # everything local, sent or not: a file to attach
+            if args.stats:
+                counts = census.stats(STATE_ROOT, cases)
+                if args.json:
+                    _json(counts)
+                else:
+                    print("".join(f"{counts[key]:>5}  {text}\n" for key, text in STATS_LINES), end="")
+            elif args.share and args.json:  # everything local, sent or not: a file to attach
                 _json(share_census(cases, str(Path.home()), pwd.getpwuid(os.getuid()).pw_name))
             elif args.share:
                 if not _share_pending():
@@ -284,7 +302,11 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 sent = {case.id for case in cases} - {case.id for case in unsent(cases, STATE_ROOT)}
                 local = [case for case in cases if case.id.startswith("LOCAL-")]
-                lines = [f"{mark(case, STATE_ROOT, sent)} {case.id}  seen {case.seen}  {case.meaning}\n      fix: {case.fix}\n" for case in local]
+                lines = [
+                    f"{mark(case, STATE_ROOT, sent)} {case.id}  seen {case.seen}  {case.meaning}\n      fix: {case.fix}\n"
+                    + (f"      seen done by hand, not run for you; to keep it as an automatic replay: arch-update learn --accept {case.id}\n" if case.witnessed else "")
+                    for case in local
+                ]
                 print("".join(lines) or "nothing learned on this machine yet\n", end="")
                 print(f"*   {len(cases) - len(local)} official cases ship with the tool (arch-update vault) · [x] shared upstream · [ ] only here")
             return 0
