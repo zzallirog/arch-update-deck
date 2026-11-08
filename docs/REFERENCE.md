@@ -264,6 +264,17 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   any of those paths and not only in the timer's quiet wait. The new check `power`
   reports it as `LOW-BATTERY`; with no working `systemd-inhibit` on battery it is
   `NO-INHIBITOR`. On mains the run goes on and says it had no lock. See [Power](#power).
+- Heavy work does not run on a battery at all, whatever the charge, and not under the
+  `power-saver` profile: the AUR update and a rebuild against new libraries are held
+  (`held.power` and `held.aur` name the reason; the repository update still runs), and
+  `arch-update scan-sessions` does nothing and says why. They wait for the charger.
+  `power.heavy_hold()` is the one question for any heavy check added later.
+- The timer's run on a battery waits for the charger, not for the 30 % threshold, and
+  the 3-day limit of the quiet wait does not send it onto the battery: every 3 days the
+  person gets a notice. A run started by hand on a battery asks first ("ON BATTERY, 72%.
+  CONTINUE?" in Update Day, one line in `arch-update auto` at a terminal).
+- The weekly service unit has `Nice=19`, `IOSchedulingClass=idle`, `CPUQuota=50%`; the
+  run's own ceiling uses nice 19 and, on a battery, at most 50 % of one CPU.
 
 ### Changed in 0.20.06
 
@@ -1270,9 +1281,11 @@ notice, at most once a month for each.
 
 The timer's run waits, and exits 80 (SKIPPED, not a failure; the timer asks
 again the next day) when a game runs (`gamescope`, `steam_app_<id>`, `wine`),
-when `/proc/pressure/{cpu,memory,io}` says the machine is busy, or on battery
-(a mains supply that is offline; a desktop has none). It waits 3 days at most:
-then it runs anyway, under the ceiling, and says why. What cannot be read, and a
+or when `/proc/pressure/{cpu,memory,io}` says the machine is busy. It waits 3 days at most:
+then it runs anyway, under the ceiling, and says why. On battery it does not wait for
+the 3 days: it waits for the charger as long as it takes (the notice comes every 3 days;
+`"quiet": false` turns this off, and so the whole wait). A mains supply that is offline
+or a battery that says `Discharging` is "on battery"; a desktop has none. What cannot be read, and a
 setting that makes no sense, counts as "go". The wait is about noise and load; whether a
 run may start at all on a low battery is a separate rule that no wait lifts (see
 [Power](#power)).
@@ -1283,7 +1296,9 @@ and the fans. `systemctl --user set-property --runtime` gives the service a
 quarter of its physical cores, one thread each (`AllowedCPUs`, a cpuset, which
 holds under any scheduler), 60 % of a CPU per core (`CPUQuota`, enforced by
 the kernel's fair scheduler only), `CPUWeight=20`, `IOWeight=20`, then idle I/O
-and nice 10. Everything the run starts inherits them: `sudo`, pacman and its
+and nice 19; on a battery the quota is 50 % of one CPU at most. The unit file itself
+has `Nice=19`, `IOSchedulingClass=idle` and `CPUQuota=50%`, for the time before the
+run has set its own. Everything the run starts inherits them: `sudo`, pacman and its
 hooks, a build. A large AUR build takes longer this way. systemd keeps such a
 runtime property until the next boot, not until the unit stops, so the run
 lifts its ceiling when it ends and lifts any left from before it sets its own;
@@ -1339,6 +1354,15 @@ charger or fix `systemd-inhibit`). On mains, or on a desktop, the run goes on, a
 report says so: `held.power` in the report, `held power: ...` in `auto --status`, a
 `power:` line on the Update Day result screen, `shutdown_lock` in the JSON of
 `arch-update kernel`, a line before the install in `arch-update rollback`.
+
+Heavy work. On a battery, at any charge, and under the `power-saver` profile
+(`powerprofilesctl get`, else `/sys/firmware/acpi/platform_profile` saying `low-power`),
+the tool starts nothing that loads the machine for long, because the person may need
+the laptop: the AUR update (which builds), a rebuild against new libraries,
+`arch-update scan-sessions`. The repository update, flatpak and snap are not heavy
+and go on above `min_battery`. A held AUR update is in `held.aur` and `held.power`
+with the command to run by hand; the next run on mains does it. A person at the
+terminal who says yes on a battery gets the light part only.
 
 ## Home
 
