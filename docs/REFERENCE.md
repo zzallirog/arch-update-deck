@@ -74,7 +74,7 @@ except tab and newline. A table cell is one line, with runs of whitespace collap
 ### The look
 
 The checks that fill `MACHINE` run on the main thread while the queue is read on
-a second one. They are `auto.look()`: one pass of the ten checks kept in
+a second one. They are `auto.look()`: one pass of the eleven checks kept in
 memory. It writes no `runs/` directory, no report and no `ask-result.json`, takes
 no lock and does not run `arch-audit`. Your configured conditions and `smoke`
 commands do run. Only an update that really starts creates a `runs/auto-<time>/`
@@ -252,6 +252,18 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.07
+
+- Every package and boot transaction the tool starts now runs under a logind block
+  inhibitor (shutdown, sleep, idle, handle-lid-switch): the unattended run and Update
+  Day `y`, `arch-update kernel`, `arch-update rollback`, `arch-update learn` and
+  `arch-update dotfiles`. The line "No shutdown or sleep inhibitor is taken" in
+  [Safety statements in detail](#safety-statements-in-detail) is replaced.
+- On battery under `min_battery` (new key, default 30) no transaction is started, on
+  any of those paths and not only in the timer's quiet wait. The new check `power`
+  reports it as `LOW-BATTERY`; with no working `systemd-inhibit` on battery it is
+  `NO-INHIBITOR`. On mains the run goes on and says it had no lock. See [Power](#power).
 
 ### Changed in 0.20.06
 
@@ -445,8 +457,18 @@ in the profile file. `arch-update` with no command opens Update Day instead.
   [Arch news](#arch-news)); it does not show or summarise the others. A
   conflict that pacman cannot settle with `--noconfirm` makes the store fail
   (for example `PACMAN-REPLACEMENT-CONFLICT`) and is reported with its `fix`.
-- No shutdown or sleep inhibitor is taken. A logout, suspend or power-off during
-  an update is not guarded. SIGTERM during an update lets the command in
+- A shutdown, a suspend, an idle timeout or a closed lid is blocked while a
+  package or boot transaction runs. The run holds a logind block inhibitor
+  (`systemd-inhibit --what=shutdown:sleep:idle:handle-lid-switch --who=arch-update
+  --mode=block`) for the whole phase, and so do `arch-update kernel`,
+  `arch-update rollback` and the command `arch-update learn` runs. A
+  forced stop (`systemctl poweroff -i` as root, the power button held, a power cut)
+  still stops the machine; the lock is logind's, not a guarantee against those. On a laptop
+  on battery under `min_battery` (default 30 %), no transaction is started
+  (`LOW-BATTERY`); without a working `systemd-inhibit` none is started on
+  battery either (`NO-INHIBITOR`), and on mains the run goes on and says in its
+  report that it has no lock. A desktop is never stopped. See [Power](#power).
+  SIGTERM during an update lets the command in
   progress finish and starts nothing new; Ctrl-C and SIGHUP never kill it either
   (see [Interrupts](#interrupts)).
 - The record written before an update is read back by `arch-update rollback`
@@ -764,7 +786,7 @@ once on `y`; the timer's `auto` cannot, and exits 70.
 
 `y` on Update Day, `arch-update auto` and the timer run the same sequence.
 
-1. **Check.** Ten checks run concurrently. They change nothing, except that the
+1. **Check.** Eleven checks run concurrently. They change nothing, except that the
    commands you configure as conditions and smoke tests run as written. The
    screen's `MACHINE` line is one such pass kept in memory (see
    [The look](#the-look)).
@@ -772,6 +794,7 @@ once on `y`; the timer's `auto` cannot, and exits 70.
    | Check | Screen name | Fails or blocks when | Exit |
    |---|---|---|---|
    | root access | `root access` | running as root, or `sudo -n true` fails | 70 |
+   | power | `power` | the machine runs on its battery and the charge is under `min_battery` (`LOW-BATTERY`); or it runs on its battery and `systemd-inhibit` is not installed (`NO-INHIBITOR`). A desktop has no battery and passes. Without `systemd-inhibit` on mains it passes, and its detail says the update goes on without a shutdown lock | 20 |
    | conditions | `config`, or the name you gave | no configuration file (70); a configured command exits non-zero (its `exit`, default 20) | 70, 20, 40, 50 |
    | record directory | `backup record` | `keep` is set and the nearest existing folder on its path is not writable or is on the same device as `/` | 50 |
    | pacman lock | `pacman is busy` | `/var/lib/pacman/db.lck` exists | 30 |
@@ -786,7 +809,9 @@ once on `y`; the timer's `auto` cannot, and exits 70.
    on the update. A check that raises an error counts as "unknown" and blocks
    the run with exit 20. The exit column applies when nothing else decides the
    exit first; see [Exit status](#exit-status).
-2. **Update.** Each installed store (`pacman`, then `yay` or `paru`, `flatpak`,
+2. **Update.** Before the first package or boot command of the run (an update, a repair, a
+   saved fix) the run takes the shutdown and sleep lock and holds it until its last command
+   has ended (see [Power](#power)). Each installed store (`pacman`, then `yay` or `paru`, `flatpak`,
    `snap`) is updated once. A failing store does not stop the others. Before the
    first update the record is written: `packages.txt`, `explicit.txt`,
    `foreign.txt` and `etc.tar.zst` (see `keep`). If the record cannot be
@@ -900,6 +925,8 @@ The shipped cases (`arch-update vault` prints them with their `meaning`):
 | `NO-ROOT` | - | `sh -c 'f=$(mktemp) && arch-update auto --sudoers > "$f" && visudo -cf "$f" && sudo install -m 0440 "$f" /etc/sudoers.d/zzz-arch-update-auto; rm -f "$f"'` |
 | `INTERRUPTED` | - | `arch-update` |
 | `ARCH-NEWS-MANUAL` | - | `arch-update news` |
+| `LOW-BATTERY` | - | `arch-update auto --dry-run` |
+| `NO-INHIBITOR` | - | `systemd-inhibit --list` |
 
 `NO-ROOT` and `SUDO-TIMESTAMP-EXPIRED` share the sudoers fix: it writes the rules
 to a temporary file, checks it with `visudo -cf` and only then installs it, so
@@ -1164,6 +1191,7 @@ file `arch-update auto` exits 70.
 | `aur_min_age_days` | With `unattended_aur`: leave out packages whose AUR entry changed within this many days. Default 7. |
 | `ask` | `true` makes the timer open Update Day in a terminal before the weekly update. Default `false`. Read only by the timer's run. See [Schedule and ask mode](#schedule-and-ask-mode). |
 | `ask_timeout_minutes` | How long the question waits for an answer, on the timer and by hand. A number greater than 0; anything else falls back to 30. |
+| `min_battery` | Percent of charge, 0 to 100. On battery below it, no package or boot transaction is started (`LOW-BATTERY`): not by the run, Update Day, `kernel`, `rollback` or `learn`. `0` turns the rule off. Anything else falls back to 30. A desktop is never stopped. See [Power](#power). Default 30. |
 | `quiet` | `false` turns off the quiet gate and the ceiling of the timer's run. Default on. See [Quiet](#quiet). |
 | `quiet_pressure` | Limits for the gate, as `{"cpu": 40, "memory": 10, "io": 30}`: the "some avg60" of `/proc/pressure/<kind>` above which the run waits. |
 | `quiet_share` | The timer's run gets one thread of every `quiet_share`-th physical core it may use (default 4: a quarter), at 60 % of a CPU each. |
@@ -1245,7 +1273,9 @@ again the next day) when a game runs (`gamescope`, `steam_app_<id>`, `wine`),
 when `/proc/pressure/{cpu,memory,io}` says the machine is busy, or on battery
 (a mains supply that is offline; a desktop has none). It waits 3 days at most:
 then it runs anyway, under the ceiling, and says why. What cannot be read, and a
-setting that makes no sense, counts as "go".
+setting that makes no sense, counts as "go". The wait is about noise and load; whether a
+run may start at all on a low battery is a separate rule that no wait lifts (see
+[Power](#power)).
 
 When it runs, it sets a ceiling on its own service, not a priority: a low
 priority only orders the queue, while the total load is what raises the clocks
@@ -1264,6 +1294,51 @@ waiting for it.
 
 The quiet gate comes after `home_bssid` and `conditions`: a run they skip does
 not start the 3 days.
+
+## Power
+
+A power-off, a suspend, a closed lid or an empty battery in the middle of a package
+or boot transaction can leave a half-installed system. Every transaction this tool
+starts is covered by two rules (`arch_updater/power.py`).
+
+The lock. Before the first command that changes the machine the tool starts one helper,
+`systemd-inhibit --what=shutdown:sleep:idle:handle-lid-switch --who=arch-update
+--why=... --mode=block sh -c 'echo held; read _'`, in a session of its own, and waits
+for it to say `held`. It holds the lock until the phase has ended: the whole
+unattended run (the stores, the repairs between them, a saved fix, the installer of
+each dotfiles repository), the whole of `arch-update kernel` (package, GRUB files,
+rollback of them), `arch-update rollback`, the whole of `arch-update learn` (the
+fix, its proof in a throwaway worktree, the retry) and the whole of `arch-update
+dotfiles`. Nothing guesses from a command line whether it is a transaction: an
+installer, a saved fix and a `sh -c` text hide it, so the whole phase is covered.
+A helper that died between two commands is noticed before the next one and taken
+again; if that cannot be done on battery, the next command is not started
+(`NO-INHIBITOR`; the GRUB rewrite of `kernel`, once begun, is finished and only
+re-locked). The lock is logind's, so it covers the root
+process `sudo` starts. The command lines are unchanged, so the sudoers rules still
+match. The helper reads a pipe from the tool: if the tool dies in any way, the pipe
+closes and the lock is let go. Update Day runs the same sequence as the timer, so it
+holds the lock too.
+
+The battery. On a machine with a battery of its own (`/sys/class/power_supply/*/type`
+is `Battery` and its `scope` is not `Device`) that runs on it (a battery says
+`Discharging`, or the mains supply is offline), a transaction is not started when the
+charge is under `min_battery`. The check is one of the eleven checks (`power`, case
+`LOW-BATTERY`, exit 20), so the timer, `auto` and Update Day stop before anything is
+changed, and it is asked again before each store, each dotfiles repository and each
+repair, in case the charge fell during the run (the steps of one dotfiles repository
+are not cut in half by it). `arch-update kernel` and `arch-update rollback` refuse with one line
+(`LOW-BATTERY: ...`, exit 1) and change nothing. A desktop has no battery and is
+never stopped. A reading that fails counts as "not on battery". A transaction that
+is already running is never stopped by a falling charge, and it outlives this tool if
+the tool is killed: the lock goes with the tool, the transaction does not.
+
+No lock. If `systemd-inhibit` is missing, or it could not take the lock, a machine
+on battery is not updated (`NO-INHIBITOR`, one line, nothing changed; plug in the
+charger or fix `systemd-inhibit`). On mains, or on a desktop, the run goes on, and the
+report says so: `held.power` in the report, `held power: ...` in `auto --status`, a
+`power:` line on the Update Day result screen, `shutdown_lock` in the JSON of
+`arch-update kernel`, a line before the install in `arch-update rollback`.
 
 ## Home
 
