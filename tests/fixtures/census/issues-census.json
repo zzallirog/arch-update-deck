@@ -1,0 +1,12 @@
+[
+ {
+  "number": 42,
+  "title": "Census: 2 learned fixes, 1 new failures",
+  "body": "### arch-update version\n\n0.20.06\n\n### Cases\n\n```json\n{\n \"schema\": \"arch-update-census/v1\",\n \"cases\": [\n  {\n   \"id\": \"LOCAL-WITNESSED-5523e43b\",\n   \"match\": \"\\\\S+\\\\s+and\\\\s+(?P<pkg>[A-Za-z0-9@_+][A-Za-z0-9@._+-]*?)-\\\\d[\\\\w.+:~]*-\\\\d+(?:\\\\.\\\\d+)?\\\\s+are\\\\s+in\\\\s+conflict\",\n   \"fix\": \"sudo pacman -R plasma-x11-session\",\n   \"meaning\": \"repo: after PACMAN-REPLACEMENT-CONFLICT somebody ran `sudo pacman -R plasma-x11-session` and the next update passed (seen 2026-10-25 in pacman.log); shown, never run for you\",\n   \"seen\": 0,\n   \"store\": \"repo\",\n   \"generic\": \"sudo pacman -R {pkg}\",\n   \"evidence\": \"[2026-10-25T18:22:13+0200] [PACMAN] Running 'pacman -R --noconfirm plasma-x11-session'\\n[2026-10-25T18:22:13+0200] [ALPM] transaction started\\n[2026-10-25T18:22:13+0200] [ALPM] removed plasma-x11-session (6.7.5-3.1)\\n[2026-10-25T18:22:13+0200] [ALPM] transaction completed\",\n   \"source\": \"pacman.log\",\n   \"origin\": \"local\"\n  },\n  {\n   \"id\": \"LOCAL-WITNESSED-bad00001\",\n   \"match\": \"Segmentation fault in flux\",\n   \"fix\": \"sudo rm -rf /var/lib/pacman && sudo pacman -Syu\",\n   \"meaning\": \"x\",\n   \"seen\": 0,\n   \"store\": \"repo\",\n   \"origin\": \"local\"\n  },\n  {\n   \"id\": \"LOCAL-WITNESSED-bad00002\",\n   \"match\": \".*\",\n   \"fix\": \"sudo pacman -Syyu\",\n   \"meaning\": \"x\",\n   \"seen\": 0,\n   \"store\": \"repo\",\n   \"origin\": \"local\"\n  },\n  {\n   \"id\": \"LOCAL-0f0f0f0f\",\n   \"match\": \"flux capacitor is down\",\n   \"fix\": \"arch-update brief\",\n   \"meaning\": \"first seen 2026-11-01 in aur: flux capacitor is down\",\n   \"seen\": 2,\n   \"origin\": \"local\"\n  },\n  {\n   \"id\": \"LOCAL-LEARNED-good0001\",\n   \"match\": \"dkms: build failed for module flux\",\n   \"repair\": \"replay\",\n   \"fix\": \"sudo dkms autoinstall && dkms status\",\n   \"meaning\": \"repo: rebuild the module\",\n   \"seen\": 1,\n   \"store\": \"repo\",\n   \"origin\": \"local\"\n  }\n ]\n}\n```\n\n### Before you submit\n\n- [X] I looked at the cases above and they hold nothing I want private.\n"
+ },
+ {
+  "number": 43,
+  "title": "not a census",
+  "body": "just a question"
+ }
+]

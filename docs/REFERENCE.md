@@ -323,6 +323,14 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
 - `arch-update census --stats` prints six numbers: failures met in unattended runs, how many were a known
   case when met, how many a run fixed by itself, and the fixes witnessed, learned and handed upstream
   (`--json` for a machine). It reads the runs' `report.json` files and writes nothing.
+- `tools/intake/intake.py` (maintainers; not installed): reads the open issues labelled `census` with `gh`
+  (or `--issues FILE.json`), takes the cases out of the form's JSON block, and prints the diff they would make
+  to `failure-modes.json`. It is a dry run unless `--pr` is given, which makes a branch, commits, pushes and
+  opens one pull request. A shared fix is only text: it is never run, it is refused when it is not valid `sh`,
+  looks destructive, has a pattern that finds lines of a good update, or is already in the catalogue, and what
+  goes in is a command for a human (`"automatic": false`, no `repair`, `"origin": "community"`). A community
+  case that names the packages it was seen for (`generic`) comes before the general shipped case that also
+  matches. Every pull request is read by a person before it is merged.
 
 ### Changed in 0.20.06
 

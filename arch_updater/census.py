@@ -136,14 +136,17 @@ def recognise(cases: list[Case], output: str, store: str | None = None) -> Case 
     2. a case witnessed here: somebody fixed this by hand once, and the tool saw how;
     3. the tool's own refusal: it stopped itself on purpose, which is not a build failure whatever else the output says;
     4. the shipped catalogue. When several cases match, one without a repair wins: a failure is only retried when
-       every cause found in it is known to be repairable.
+       every cause found in it is known to be repairable. Among those, a community case with a fix for the packages
+       named in the failure (`generic`) comes first.
     """
     found = [case for case in cases if case.matches(output) and not (case.store and store is not None and case.store != store)]
     for kind in (lambda case: case.learned, lambda case: case.witnessed, lambda case: case.id == TOOL_REFUSED):
         chosen = next((case for case in found if kind(case)), None)
         if chosen is not None:
             return chosen
-    return next((case for case in found if not case.repair), found[0] if found else None)
+    plain = [case for case in found if not case.repair]
+    plain.sort(key=lambda case: not case.generic)  # a shipped case that names the packages it was seen for says more than a general one
+    return plain[0] if plain else (found[0] if found else None)
 
 
 def signature(output: str) -> str:
