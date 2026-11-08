@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import census
+from . import census, power
 from .textsafe import secrets
 from .engine import STATE_ROOT
 
@@ -181,39 +181,44 @@ def learn(
     for ref in (meta.get("rollback"), meta.get("target")):
         if ref is not None and not REF.fullmatch(str(ref)):
             raise ValueError(f"{ref!r} is not a plain ref name; nothing run")
-    # A merge that failed was undone: the fix is tried on the failure itself, reproduced in a throwaway worktree.
-    # A repository fixed by hand meanwhile then proves nothing about the command, so it is not what is checked.
-    try:
-        reproduced = dotfiles and meta.get("rollback") and meta.get("target") and _reproduce_merge(where, meta["rollback"], meta["target"], match, command)
-    except subprocess.SubprocessError as exc:
-        raise ValueError(f"git did not answer while reproducing the failure ({type(exc).__name__}), nothing saved") from None
-    if not reproduced:  # anything else: run the fix where it belongs, then redo the step
-        status, said = run(["env", "-C", str(Path(where or "~").expanduser()), "sh", "-c", command])
-        if status != 0:
-            raise ValueError(f"the command failed (exit {status}), nothing saved:\n{said.strip()[-1500:]}")
-    case = census.Case(
-        id=LEARNED + hashlib.sha256(f"{meta['store']}\0{match}".encode()).hexdigest()[:8],
-        match=match,
-        repair=None if dotfiles else "replay",  # a dotfiles step replays it itself, in its repository
-        fix=command.strip(),
-        meaning=f"{meta['store']}: {how}".strip(),
-        classify_output=not dotfiles,  # a dotfiles case speaks for its step only, never for a pacman failure
-        where=where,
-        store=meta["store"],
-        seen=0,
-    )
-    cases = census.load(state_root)
-    # The unknown case recorded for this very failure is what the fix answers: it goes, the lesson stays.
-    unknown = [item for item in cases if item.id.startswith("LOCAL-") and not item.id.startswith(LEARNED) and item.match and _finds(item.match, output)]
-    kept = [item for item in cases if item not in unknown and item.id != case.id]
-    census.save_local([*kept, case], state_root)
-    retry = retry_for(meta["store"], where)
-    if retry and not reproduced:
-        # The step itself, once more: a dotfiles step replays the case saved just now; a store runs its own update.
-        status, said = run(retry)
-        if status != 0:
-            census.save_local(cases, state_root)  # as it was: a fix that does not hold is not a case
-            raise ValueError(f"the failed step still fails with this fix (exit {status}), nothing saved:\n{said.strip()[-1500:]}")
+    # The saved fix, the reproduction in a worktree and the retry may each run pacman, an installer or anything else:
+    # the whole of it is one phase under the shutdown lock and the battery rule, with no guessing from the command line.
+    with power.guard("running a saved fix and redoing the failed step"):
+        # A merge that failed was undone: the fix is tried on the failure itself, reproduced in a throwaway worktree.
+        # A repository fixed by hand meanwhile then proves nothing about the command, so it is not what is checked.
+        try:
+            reproduced = dotfiles and meta.get("rollback") and meta.get("target") and _reproduce_merge(where, meta["rollback"], meta["target"], match, command)
+        except subprocess.SubprocessError as exc:
+            raise ValueError(f"git did not answer while reproducing the failure ({type(exc).__name__}), nothing saved") from None
+        if not reproduced:  # anything else: run the fix where it belongs, then redo the step
+            power.checkpoint()
+            status, said = run(["env", "-C", str(Path(where or "~").expanduser()), "sh", "-c", command])
+            if status != 0:
+                raise ValueError(f"the command failed (exit {status}), nothing saved:\n{said.strip()[-1500:]}")
+        case = census.Case(
+            id=LEARNED + hashlib.sha256(f"{meta['store']}\0{match}".encode()).hexdigest()[:8],
+            match=match,
+            repair=None if dotfiles else "replay",  # a dotfiles step replays it itself, in its repository
+            fix=command.strip(),
+            meaning=f"{meta['store']}: {how}".strip(),
+            classify_output=not dotfiles,  # a dotfiles case speaks for its step only, never for a pacman failure
+            where=where,
+            store=meta["store"],
+            seen=0,
+        )
+        power.checkpoint()  # before the case is saved, so a refusal leaves nothing to undo
+        cases = census.load(state_root)
+        # The unknown case recorded for this very failure is what the fix answers: it goes, the lesson stays.
+        unknown = [item for item in cases if item.id.startswith("LOCAL-") and not item.id.startswith(LEARNED) and item.match and _finds(item.match, output)]
+        kept = [item for item in cases if item not in unknown and item.id != case.id]
+        census.save_local([*kept, case], state_root)
+        retry = retry_for(meta["store"], where)
+        if retry and not reproduced:
+            # The step itself, once more: a dotfiles step replays the case saved just now; a store runs its own update.
+            status, said = run(retry)
+            if status != 0:
+                census.save_local(cases, state_root)  # as it was: a fix that does not hold is not a case
+                raise ValueError(f"the failed step still fails with this fix (exit {status}), nothing saved:\n{said.strip()[-1500:]}")
     meta["learned"] = case.id
     (folder / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     return case
