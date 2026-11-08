@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from . import atomic
+from . import atomic, power
 
 
 DATA_DIR = Path(__file__).resolve().parent / "data"  # shipped inside the package, so a wheel carries it
@@ -569,6 +569,16 @@ def _roll_back(privileged: str, backup: str, grub_path: Path, log_path: Path) ->
 
 
 def select_kernel(profile_id: str, dry_run: bool = False) -> dict[str, Any]:
+    """Install a kernel profile and make it the GRUB default. Held under a shutdown and sleep lock from the first command to the last."""
+    if dry_run or profile_id == "auto":
+        return _select_kernel(profile_id, dry_run)
+    notes: list[str] = []
+    with power.guard(f"installing kernel profile {profile_id} and rewriting the boot menu", note=notes.append):
+        result = _select_kernel(profile_id, dry_run)
+    return {**result, "shutdown_lock": notes[0]} if notes else result
+
+
+def _select_kernel(profile_id: str, dry_run: bool = False) -> dict[str, Any]:
     profiles = available_kernel_profiles()
     profile = next((item for item in profiles if item["id"] == profile_id), None)
     if not profile:
@@ -596,6 +606,10 @@ def select_kernel(profile_id: str, dry_run: bool = False) -> dict[str, Any]:
             "reason": f"kernel installed; {bootloader} default selection is not supported",
         }
 
+    try:
+        power.checkpoint()  # a lock lost since the install is taken again, or the boot files are not touched on a battery without one
+    except power.Refused as refusal:
+        raise power.Refused(refusal.case, f"kernel {package} is installed, but {refusal.reason}; GRUB was left untouched") from None
     grub_path = GRUB_DEFAULT_PATH
     grub_cfg_path = GRUB_CFG_PATH
     try:
@@ -628,6 +642,7 @@ def select_kernel(profile_id: str, dry_run: bool = False) -> dict[str, Any]:
             raise RuntimeError(
                 f"could not back up {grub_path} (exit {backup_result.returncode}); GRUB was left untouched"
             )
+        power.checkpoint(strict=False)  # in the middle of the rewrite: take the lock again if it was lost, never stop half way
         install_grub = stream_command([privileged, "install", "-m", "0644", "--", temporary, str(grub_path)], log_path)
         regenerate = stream_command([privileged, "grub-mkconfig", "-o", str(GRUB_CFG_PATH)], log_path)
         if install_grub.returncode or regenerate.returncode:

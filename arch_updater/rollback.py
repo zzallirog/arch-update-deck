@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
+from . import power
 from .engine import aur_cache_root
 from .shell import Shell
 
@@ -136,13 +137,21 @@ def run(
             out.write("pacman asks its own questions while it installs: run this at a terminal\n")
             return 1
         return 0
+    if reason := power.low(power.config_of_machine()):  # before the question, not after the yes
+        out.write(f"LOW-BATTERY: {reason}\nnothing was changed\n")
+        return 1
     if not yes:
         from .day import confirm  # the screen's own yes/no, read on the same terminal
 
         if not confirm(f"Roll back {len(found.files)} package{'s' if len(found.files) != 1 else ''} with pacman -U?", stdin, out):
             out.write("nothing was changed\n")
             return 0
-    return sh.interactive(command(found))
+    try:
+        with power.guard("rolling packages back with pacman -U", note=lambda line: out.write(f"{line}\n")):
+            return sh.interactive(command(found))
+    except power.Refused as refusal:  # a low battery, or no lock on a battery: nothing was changed
+        out.write(f"{refusal}\nnothing was changed\n")
+        return 1
 
 
 def as_dict(found: Plan) -> dict[str, Any]:
