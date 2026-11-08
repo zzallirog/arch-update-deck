@@ -17,7 +17,7 @@ import pytest
 
 from arch_updater import auto, briefs, census, engine, exits, power, watch
 from arch_updater import main as cli
-from arch_updater.power import Inhibitor, start as real_start  # noqa: F401 - bound before the suite's autouse fixture replaces power.start
+from arch_updater.power import Inhibitor, profile as real_profile, start as real_start  # noqa: F401 - bound before the suite's autouse fixture replaces them
 from test_auto import UPGRADE, box, cases_of, ok  # noqa: F401 - box is a fixture
 from test_kernel import _calls_recorder
 from test_rollback import Tty, ground  # noqa: F401 - ground is a fixture
@@ -579,11 +579,12 @@ def test_a_helper_that_died_between_two_stores_is_replaced_before_the_next_comma
 def test_a_helper_that_died_on_a_battery_with_no_way_to_take_another_stops_the_next_store(box, monkeypatch) -> None:
     logind = Logind(fail_from=2)
     monkeypatch.setattr(power, "start", logind.start)
+    box.sh.tools.add("flatpak")  # the AUR does not build on a battery at all; flatpak is the next store
     supplies(box.root, battery=("Discharging", 80), mains=False)
     ran = box.sh.logged
     box.patch.setattr(box.sh, "logged", lambda argv, log, timeout=0: (ran(argv, log, timeout), logind.die() if argv == UPGRADE else None)[0])
     report = box.run()
-    assert box.sh.count("aur") == 0 and ("aur", "NO-INHIBITOR") in cases_of(report)
+    assert box.sh.count("flatpak") == 0 and ("flatpak", "NO-INHIBITOR") in cases_of(report)
 
 
 def kernel_with_lost_lock(monkeypatch, tmp_path, logind):
@@ -646,3 +647,90 @@ def test_a_battery_that_falls_in_the_middle_of_one_repository_does_not_cut_its_s
     box.run()
     ran = [argv[-1] for argv in box.sh.ran if argv[:2] == ["env", "-C"]]
     assert ran == ["./pull", "./install", "./link"]
+
+
+# ── P3, P5: heavy work does not run on a battery at all ────────────────────
+
+def fake_profile(tmp_path, monkeypatch, value: str) -> None:
+    """A powerprofilesctl on PATH that answers `get`; the suite's own stub of power.profile is lifted for the test."""
+    from arch_updater import power as module
+
+    monkeypatch.setattr(module, "profile", real_profile)
+    folder = tmp_path / "ppd"
+    folder.mkdir()
+    tool = folder / "powerprofilesctl"
+    tool.write_text(f'#!/bin/sh\n[ "$1" = get ] && echo {value}\n')
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{folder}:{os.environ['PATH']}")
+
+
+def test_on_a_battery_at_90_percent_no_aur_build_is_started_and_the_report_says_why(box, logind) -> None:
+    supplies(box.root, battery=("Discharging", 90), mains=False)
+    report = box.run()
+    assert box.sh.count("aur") == 0 and box.sh.count("repo") == 1, "the repository update is the light part and goes on"
+    assert "battery (90%)" in report["held"]["power"] and "AUR" in report["held"]["power"]
+    assert "battery" in report["held"]["aur"] and "yay -Sua" in report["held"]["aur"]
+    assert report["trouble"] == []
+
+
+def test_on_mains_the_aur_is_built(box, logind) -> None:
+    supplies(box.root, battery=("Charging", 90), mains=True)
+    box.run()
+    assert box.sh.count("aur") == 1
+
+
+def test_a_rebuild_against_new_libraries_waits_for_the_charger_too(box, logind) -> None:
+    box.config(unattended_aur=True, smoke=[{"argv": ["example-app", "--version"], "rebuild": "example-app-git"}])
+    box.sh.tools.add("example-app")
+    box.sh.fail["example-app --version"] = [auto_failed("symbol lookup error")] * 9
+    supplies(box.root, battery=("Discharging", 90), mains=False)
+    report = box.run()
+    assert not any(argv[0] == "yay" for argv in box.sh.ran), report["repairs"]
+
+
+def auto_failed(output):
+    from test_auto import failed
+
+    return failed(output)
+
+
+def test_the_power_saver_profile_holds_the_aur_build_back_on_mains(box, logind, tmp_path, monkeypatch) -> None:
+    fake_profile(tmp_path, monkeypatch, "power-saver")
+    report = box.run()
+    assert box.sh.count("aur") == 0 and "power-saver" in report["held"]["power"]
+
+
+@pytest.mark.parametrize("value", ["balanced", "performance"])
+def test_another_profile_does_not_hold_it_back(box, logind, tmp_path, monkeypatch, value) -> None:
+    fake_profile(tmp_path, monkeypatch, value)
+    box.run()
+    assert box.sh.count("aur") == 1
+
+
+def test_the_firmware_low_power_profile_counts_as_power_saver(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(power, "profile", real_profile)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))  # no powerprofilesctl
+    (tmp_path / "sys" / "firmware" / "acpi").mkdir(parents=True)
+    (tmp_path / "sys" / "firmware" / "acpi" / "platform_profile").write_text("low-power\n")
+    assert power.heavy_hold(tmp_path / "sys") and "power-saver" in power.heavy_hold(tmp_path / "sys")
+    (tmp_path / "sys" / "firmware" / "acpi" / "platform_profile").write_text("balanced\n")
+    assert power.heavy_hold(tmp_path / "sys") is None
+
+
+def test_a_desktop_and_a_broken_reading_never_hold_work_back(tmp_path, monkeypatch) -> None:
+    assert power.heavy_hold(tmp_path) is None
+    monkeypatch.setattr(power, "battery", lambda root=None: 1 / 0)
+    assert power.heavy_hold(tmp_path) is None
+
+
+def test_scan_sessions_is_not_run_on_a_battery_whatever_the_charge(tmp_path, monkeypatch, capsys) -> None:
+    from arch_updater import main as module
+
+    scanned = []
+    monkeypatch.setattr(module, "write_session_report", lambda out: scanned.append(out) or {"markdown": str(tmp_path / "r.md"), "report": {"counts": {"sessions_with_proven_changes": 0}}})
+    (tmp_path / "r.md").write_text("report\n")
+    supplies(tmp_path, battery=("Discharging", 95), mains=False)
+    assert cli.main(["scan-sessions", "--output-dir", str(tmp_path)]) == 0
+    assert scanned == [] and "scan-sessions was not run" in capsys.readouterr().err
+    supplies(tmp_path, battery=("Charging", 95), mains=True)
+    assert cli.main(["scan-sessions", "--output-dir", str(tmp_path)]) == 0 and len(scanned) == 1

@@ -14,6 +14,9 @@ Update Day, `arch-update kernel`, `arch-update rollback`, `arch-update learn`, `
   guesses from a command line whether it is a transaction (an installer, a saved fix and a `sh -c` text hide it).
 * a transaction is not started on a laptop that runs on its battery below a threshold (`min_battery` in auto.json,
   30 by default). A desktop has no battery and is never stopped.
+* heavy work (an AUR build, the scan of old sessions, a check of every file of every package) is not started at all on a
+  battery, whatever the charge, nor under the `power-saver` profile: the person may need the laptop for hours. It waits
+  for the charger. See `heavy_hold`.
 
 Without a working inhibitor the run goes on only when the machine is not on battery, and says so.
 """
@@ -113,6 +116,38 @@ def low(config: dict[str, Any] | None, sys_root: Path | None = None) -> str | No
         if state.on_battery and state.percent is not None and state.percent < limit:
             return f"the battery is at {state.percent}% and discharging, under the {limit}% a package update needs to start; plug in the charger"
     except Exception:  # noqa: BLE001 - a reading that breaks must not stop a desktop
+        return None
+    return None
+
+
+HEAVY = "heavy work such as an AUR build waits for the charger"
+
+
+def profile(sys_root: Path | None = None) -> str | None:
+    """The power profile the person chose: `powerprofilesctl get`, else the firmware's platform_profile. None when unknown."""
+    tool = shutil.which("powerprofilesctl")
+    if tool:
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            answer = subprocess.run([tool, "get"], capture_output=True, text=True, timeout=5, check=False)
+            if answer.returncode == 0 and answer.stdout.strip():
+                return answer.stdout.strip()
+    sys_root = sys_root or quiet.SYS
+    with contextlib.suppress(OSError):
+        firmware = (sys_root / "firmware" / "acpi" / "platform_profile").read_text(encoding="utf-8").strip()
+        return "power-saver" if firmware in ("low-power", "power-saver") else firmware or None
+    return None
+
+
+def heavy_hold(sys_root: Path | None = None) -> str | None:
+    """Why heavy work must wait now, or None. On any battery, at any charge, or under the power-saver profile. Never raises."""
+    try:
+        state = battery(sys_root)
+        if state.on_battery:
+            charge = f" ({state.percent}%)" if state.percent is not None else ""
+            return f"the machine runs on its battery{charge}; {HEAVY}"
+        if profile(sys_root) == "power-saver":
+            return f"the power profile is power-saver; {HEAVY}, or set another profile"
+    except Exception:  # noqa: BLE001 - what cannot be read does not hold work back
         return None
     return None
 

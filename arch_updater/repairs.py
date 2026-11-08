@@ -81,6 +81,8 @@ def rebuild_against_new_libraries(world: World) -> bool:
         return False
     if not aur_handoff.shim_installed(world.sh):
         return False
+    if world.heavy_hold() is not None:  # a rebuild compiles: on a battery it waits for the charger
+        return False
     world.command([*REBUILD, *aur_handoff.flags(world.sh.path("arch-update")), *world.rebuild])
     return True
 

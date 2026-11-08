@@ -143,6 +143,16 @@ class World:
             self.held["power"] = power.no_lock_on_mains(self.lock.error)
         return None
 
+    def heavy_hold(self) -> str | None:
+        """Why work that loads the machine (an AUR build) must wait now, or None. Said in held.power, so the report names it."""
+        if self.dry_run:
+            return None
+        reason = power.heavy_hold()
+        if reason is not None:
+            self.held["power"] = reason
+            self.note("power", heavy=True, reason=reason)
+        return reason
+
     def in_unit(self, work: Callable[..., Any], *args: Any) -> Any:
         self.unit = True
         try:
@@ -293,6 +303,9 @@ class World:
             return None
         if store.tool != "yay" or not aur_handoff.shim_installed(self.sh):
             self.held["aur"] = f"unattended AUR needs yay and the root shim {aur_handoff.SHIM}; run `{AUR_BY_HAND}`"
+            return None
+        if (heavy := self.heavy_hold()) is not None:  # a build is heavy work: on a battery it waits for the charger
+            self.held["aur"] = f"{heavy}; the next run on mains does it, or run `{AUR_BY_HAND}`"
             return None
         try:
             fresh, unsafe = stores.aur_review(self.sh, aur_min_age(self.config), STATE_ROOT / stores.MAINTAINERS, scan=True)

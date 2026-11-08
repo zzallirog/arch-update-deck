@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__, aur_handoff, auto, briefs, day, discover, news, rollback
+from . import __version__, aur_handoff, auto, briefs, day, discover, news, power, rollback
 from .auto import consent, init_config, run_auto, status, sudoers_rules
 from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
@@ -268,6 +268,9 @@ def main(argv: list[str] | None = None) -> int:
             _json(classify_failures(args.classify) if args.classify else load_json(VAULT_PATH))
             return 0
         if command == "scan-sessions":
+            if (waits := power.heavy_hold()) is not None:  # it reads every transcript on the disk: not on a battery
+                print(f"arch-update: scan-sessions was not run: {waits}", file=sys.stderr)
+                return 0
             result = write_session_report(args.output_dir)
             if args.json:
                 _json(result["report"])

@@ -68,6 +68,7 @@ def private_home(tmp_path, monkeypatch):
         held = True
 
     monkeypatch.setattr(power, "start", lambda why, wait=10.0: Held())
+    monkeypatch.setattr(power, "profile", lambda sys_root=None: None)  # the live machine's power profile is not a test's business
     for name, module in list(sys.modules.items()):
         if not name.startswith("arch_updater."):
             continue
