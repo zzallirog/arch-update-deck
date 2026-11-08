@@ -843,3 +843,49 @@ def test_on_a_battery_the_run_takes_at_most_half_a_core_and_nice_19(tmp_path, mo
     calls.clear()
     quiet.calm({}, lambda argv: calls.append(argv) or 0, unit, root)
     assert "CPUQuota=120%" in calls[1]
+
+
+# ── P7 with the real helper: its process is killed between two stores ──────
+
+def killed_between_two_stores(box, monkeypatch, tmp_path, script: str, battery: bool):
+    """The real power.start against a stand-in systemd-inhibit; the first helper is killed once pacman is done."""
+    fake_inhibit(tmp_path, monkeypatch, script)
+    started: list[Inhibitor] = []
+
+    def start(why, wait=10.0):
+        lock = real_start(why, wait)
+        started.append(lock)
+        return lock
+
+    monkeypatch.setattr(power, "start", start)
+    if battery:
+        box.sh.tools.add("flatpak")
+        supplies(box.root, battery=("Discharging", 80), mains=False)
+    seen = []
+    ran = box.sh.logged
+
+    def logged(argv, log, timeout=0):
+        result = ran(argv, log, timeout)
+        if argv == UPGRADE:
+            started[0].process.kill()  # the helper dies (OOM, a stray kill) with the first store done
+            started[0].process.wait()
+        elif argv[0] in ("yay", "flatpak"):
+            seen.append((argv[0], started[-1].held, len(started)))
+        return result
+
+    monkeypatch.setattr(box.sh, "logged", logged)
+    return started, seen
+
+
+def test_a_helper_process_killed_between_two_stores_is_replaced_before_the_next_one(box, monkeypatch, tmp_path) -> None:
+    started, seen = killed_between_two_stores(box, monkeypatch, tmp_path, 'shift 4\nexec "$@"\n', battery=False)
+    box.run()
+    assert seen == [("yay", True, 2)], "the AUR update ran under a second, living helper"
+
+
+def test_a_helper_process_killed_between_two_stores_on_a_battery_that_cannot_be_replaced_stops_the_next_store(box, monkeypatch, tmp_path) -> None:
+    once = tmp_path / "once"
+    script = f'[ -e {once} ] && exit 1\ntouch {once}\nshift 4\nexec "$@"\n'
+    started, seen = killed_between_two_stores(box, monkeypatch, tmp_path, script, battery=True)
+    report = box.run()
+    assert seen == [] and len(started) == 2 and ("flatpak", "NO-INHIBITOR") in cases_of(report)
