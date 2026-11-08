@@ -60,18 +60,29 @@ esac
 """
 SUDO = '#!/bin/sh\n[ "$1" = -n ] && shift\nexec "$@"\n'
 FLATPAK = '#!/bin/sh\necho "$@" >> "$MARK/flatpak"\n'
+# logind's lock as a folder of files: one per holder, there while the held command runs, gone when it ends (any way).
+INHIBIT = """#!/bin/sh
+d="$MARK/inhibit"
+if [ "$1" = --list ]; then ls "$d"; exit 0; fi
+while [ "${1#--}" != "$1" ]; do shift; done
+echo $$ > "$d/$$"
+"$@"
+rc=$?
+rm -f "$d/$$"
+exit $rc
+"""
 TAR = "#!/bin/sh\nexit 0\n"  # the record of /etc: not this test's business, and the real /etc is not read
 
 
 @pytest.fixture
 def machine(tmp_path):
     bin_dir, mark, home = tmp_path / "bin", tmp_path / "mark", tmp_path / "home"
-    for folder in (bin_dir, mark, home / ".config/arch-updater", tmp_path / "proc"):
+    for folder in (bin_dir, mark, mark / "inhibit", home / ".config/arch-updater", tmp_path / "proc"):
         folder.mkdir(parents=True, exist_ok=True)
-    for name, text in (("pacman", PACMAN), ("sudo", SUDO), ("flatpak", FLATPAK), ("tar", TAR)):
+    for name, text in (("pacman", PACMAN), ("sudo", SUDO), ("flatpak", FLATPAK), ("tar", TAR), ("systemd-inhibit", INHIBIT)):
         (bin_dir / name).write_text(text)
         (bin_dir / name).chmod(0o755)
-    for name in ("sleep", "true"):
+    for name in ("sleep", "true", "sh", "ls", "rm"):
         (bin_dir / name).symlink_to(f"/usr/bin/{name}")
     (home / ".config/arch-updater/auto.json").write_text('{"conditions": [], "unattended_aur": false}')
     state = home / ".local/state/arch-updater"
@@ -128,6 +139,16 @@ def flatpak_updated(mark: Path) -> bool:
     return "update -y --noninteractive" in calls
 
 
+def held(mark: Path, wait: float = 0.0) -> list[str]:
+    """Who holds the (fake) shutdown lock now; given `wait` seconds, until nobody does."""
+    deadline = time.monotonic() + wait
+    while True:
+        holders = sorted(path.name for path in (mark / "inhibit").iterdir())
+        if not holders or time.monotonic() >= deadline:
+            return holders
+        time.sleep(0.05)
+
+
 def lock_is_free(state: Path) -> bool:
     with (state / "auto.lock").open("a") as lock:
         try:
@@ -173,3 +194,13 @@ def test_without_a_signal_the_same_tree_runs_through(machine) -> None:
     code, report = finish(child)
     assert code == 0 and report["state"] == "IDLE", report["trouble"]
     assert (machine.mark / "finished").is_file() and flatpak_updated(machine.mark)
+
+
+@pytest.mark.parametrize("sent", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGKILL])
+def test_no_way_to_end_the_run_leaves_the_shutdown_lock_held(machine, sent) -> None:
+    child = machine.start()
+    machine.pacman_started(child)
+    assert len(held(machine.mark)) == 1, "the lock is held while pacman runs"
+    child.send_signal(sent)
+    child.communicate(timeout=60)
+    assert held(machine.mark, wait=10) == [], f"the lock outlived the run ended by signal {int(sent)}"
