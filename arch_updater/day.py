@@ -832,16 +832,6 @@ def scheduled(sh: Shell | None = None) -> int:
     if stop is not None and stop.case == "ARCH-NEWS-MANUAL":  # a post asks for a step by hand: nothing runs until a person has read it
         _say(sh, f"{stop.detail}; the weekly update was not run")
         return exits.SKIPPED
-    if (config or {}).get("quiet") is not False and power.on_battery():
-        # Not the charge level that decides but the charger: a laptop on its battery may be needed by the person for hours.
-        # The wait has no end that sends the run onto the battery; after a few days the person is told.
-        waited_out = quiet.waited("on battery", STATE_ROOT) is None
-        message = "the machine runs on its battery; the update waits for the charger"
-        if waited_out:
-            _say(sh, f"{message} (for {quiet.MAX_WAIT_DAYS} days now). Plug in the charger, or update by hand: arch-update")
-        else:
-            print(f"arch-update: waiting, {message}")
-        return exits.SKIPPED
     reason = quiet.gate(config)
     waiting = quiet.waited(reason, STATE_ROOT)
     if waiting:  # not a visit: the timer asks again tomorrow, for a few days at most
