@@ -115,14 +115,30 @@ def _pressure(proc: Path, kind: str) -> float | None:
 
 
 def _on_battery(sys_root: Path) -> bool:
-    """True only when a mains supply exists and says it is offline: a desktop has none and is never on battery."""
-    mains = []
+    """On battery: a battery of the machine says Discharging; or, when none says what it does, a mains supply says offline.
+
+    A battery that says Charging, Full or Not charging is on a charger whatever the mains supply reads (a USB-C
+    charger shows up as a separate supply and the mains one stays 0). A desktop has no battery and no offline mains.
+    """
+    mains, states = [], set()
     for supply in (sys_root / "class" / "power_supply").glob("*"):
         try:
-            if (supply / "type").read_text(encoding="utf-8").strip() == "Mains":
+            kind = (supply / "type").read_text(encoding="utf-8").strip()
+            if kind == "Mains":
                 mains.append((supply / "online").read_text(encoding="utf-8").strip() == "1")
+            elif kind == "Battery":
+                try:
+                    if (supply / "scope").read_text(encoding="utf-8").strip() == "Device":
+                        continue  # a mouse, a headset, a phone
+                except OSError:
+                    pass
+                states.add((supply / "status").read_text(encoding="utf-8").strip())
         except OSError:
             continue
+    if "Discharging" in states:
+        return True
+    if states & {"Charging", "Full", "Not charging"}:
+        return False
     return bool(mains) and not any(mains)
 
 
