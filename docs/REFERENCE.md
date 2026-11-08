@@ -290,6 +290,18 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   loaded. The tool's own refusals (`arch-update: ... refused`) are the new case
   `TOOL-REFUSED`; they win over every other case the output also matches, and are
   never filed as a build failure or as a new `LOCAL-` case.
+- Learning by witnessing. At the end of a run that passed a store, the open brief of that store is
+  read against `/var/log/pacman.log`: the package commands typed by hand between the failure and this
+  run (finished transactions only; `-Syu`, refreshes and queries are not fixes) that name a package the
+  failure names become a witnessed case `LOCAL-WITNESSED-<hash>` with the commands as `fix` and the log
+  lines as `evidence`. A package name that stands in the failure and in the command is a capture group,
+  so the case matches the next pair of packages and `fix_for` puts their names in. The report lists the new
+  ones under `witnessed`. A witnessed fix is never run by the tool, whatever the file says: its `repair`
+  is forced to none on load. It is shown in the brief (`## A fix somebody ran by hand`), in the
+  notification (a click opens `arch-update brief`, never the fix), in `status` and in the report.
+- Recognition asks every kind of knowledge and answers in a fixed order: a learned case, then a
+  witnessed one, then the tool's own refusal, then the shipped catalogue (the case without a repair
+  first). A witnessed or learned case answers only the store it was made for.
 
 ### Changed in 0.20.06
 

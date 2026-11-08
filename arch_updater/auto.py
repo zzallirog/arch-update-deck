@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import aur_handoff, briefs, census, discover, dotfiles, exits, pacnew, power, repairs, restarts, share_report, stores, tis, watch
+from . import aur_handoff, briefs, census, discover, dotfiles, exits, pacnew, power, repairs, restarts, share_report, stores, tis, watch, witness
 from .cve import scan_cves
 from .engine import STATE_ROOT, CommandResult, _write_json, load_json
 from .exits import Stopped
@@ -518,8 +518,18 @@ def _trouble(world: World) -> list[dict[str, Any]]:
         by = "Ctrl-C" if world.signum == signal.SIGINT else signal.Signals(world.signum).name
         items.append(Verdict("run", "fail", "INTERRUPTED", f"stopped with {by}" if by == "Ctrl-C" else f"stopped by {by}"))
     known = {case.id: case for case in world.cases}
+
+    def fix_for(item: Verdict) -> str:
+        """The case's command; a witnessed one has this failure's package names put in."""
+        return known[item.case].fix_for(world.outputs.get(item.probe, item.detail)) if item.case in known else ""
+
     return [
-        {**asdict(item), "meaning": known[item.case].meaning if item.case in known else "", "fix": known[item.case].fix if item.case in known else ""}
+        {
+            **asdict(item),
+            "meaning": known[item.case].meaning if item.case in known else "",
+            "fix": fix_for(item),
+            **({"witnessed": True} if item.case in known and known[item.case].witnessed else {}),  # a fix somebody ran by hand: shown, never run
+        }
         for item in items
     ]
 
@@ -528,7 +538,10 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
     """Tell the desktop how the run ended; a run nobody hears about is not finished."""
     if not sh.has("notify-send"):
         return
-    body = report["crash"] or "; ".join(f"{item['probe']}: {cause(item['detail'])} → {item['fix']}" for item in report["trouble"])
+    body = report["crash"] or "; ".join(
+        f"{item['probe']}: {cause(item['detail'])} → {item['fix']}" + (" (done by hand once on this machine; not run for you)" if item.get("witnessed") else "")
+        for item in report["trouble"]
+    )
     body = body or f"updated: {report['updated'] or 'nothing'}"
     if report.get("self_fixed"):
         count = len(report["self_fixed"])
@@ -547,7 +560,8 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
         count = report["learned_unshared"]
         sell = f" · your updater learned to fix {count} thing{'s' if count > 1 else ''} on its own. Click to pass {'them' if count > 1 else 'it'} on, so other people's updates fix themselves too"
     notice = ["notify-send", f"--urgency={urgency}", f"arch-update auto: {report['state']}", body[: 400 - len(sell)] + sell]
-    fix = next((item["fix"] for item in report["trouble"] if item["fix"]), AUR_BY_HAND if "aur" in report["held"] else "")
+    # A click opens a terminal that runs this command: for a fix somebody ran by hand once, that is the brief that shows it.
+    fix = next((witness.SHOW if item.get("witnessed") else item["fix"] for item in report["trouble"] if item["fix"]), AUR_BY_HAND if "aur" in report["held"] else "")
     fix = fix or ("arch-update census --share" if report.get("learned_unshared") else "")
     terminal = sh.terminal()
     if not (fix and terminal and sh.has("systemd-run")):
@@ -643,6 +657,12 @@ def run_auto(
         except Exception as exc:  # whatever broke, the week ends in a report, not a traceback
             out, crash = 0, f"{type(exc).__name__}: {exc}"
         world.release_power()  # the last command has ended; what follows only reads and writes the report
+        witnessed: list[str] = []
+        if not dry_run and not crash and not world.interrupted:
+            try:  # what was typed by hand between an earlier failure and this passing run: read from pacman.log, run never
+                witnessed = [case.id for case in witness.settle(STATE_ROOT, world.cases, set(world.done), datetime.fromisoformat(started))]
+            except Exception:  # noqa: BLE001 - a log that cannot be read is no reason to lose the week's report
+                witnessed = []
         try:
             written = world.write_briefs()
         except OSError:  # a brief that cannot be written must not lose the report
@@ -678,6 +698,7 @@ def run_auto(
             "held": world.held,
             "offers": offers,
             "learned_unshared": learned_unshared,
+            "witnessed": witnessed,  # fixes seen in pacman.log this run (new witnessed cases)
             "self_fixed": proved,
             "repairs": world.repairs,
             "pacnew": world.pacnew,

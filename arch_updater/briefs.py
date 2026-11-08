@@ -89,6 +89,7 @@ def write(
     meta = {"store": store, "case": case.id, "run_id": run_id, "where": where, "at": datetime.now().astimezone().isoformat(), "learned": None, **(facts or {})}
     (folder / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     known = [item for item in cases or [] if item.match and _finds(item.match, output)]
+    by_hand = [item for item in known if item.witnessed]
     places = [f"- failing output, whole: {folder / 'failure.log'}"]
     if log is not None:
         places.append(f"- the run's log, every command in order: {log}")
@@ -112,8 +113,18 @@ def write(
             "```",
             "",
             "## Known cases this output matches",
-            *([f"- {item.id}: {item.meaning} (fix: {item.fix})" for item in known] or ["- none: this is new"]),
+            *([f"- {item.id}: {item.meaning} (fix: {item.fix_for(output)})" for item in known] or ["- none: this is new"]),
             "",
+            *(
+                [
+                    "## A fix somebody ran by hand",
+                    *[f"- `{item.fix_for(output)}` ({item.source or 'seen on this machine'}). The updater has not run it and will not: read it, run it yourself if it is what you want." for item in by_hand],
+                    f"- To let the next run do it by itself: `arch-update learn --accept {by_hand[0].id}` (it runs the command now, on this failure, and keeps it only if the failed step then passes).",
+                    "",
+                ]
+                if by_hand
+                else []
+            ),
             "## Rules a fix keeps",
             RULES,
             "",
