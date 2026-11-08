@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import exits, home, news, repairs, space
+from . import exits, home, news, power, repairs, space
 from .engine import STATE_ROOT, attest, snapshot
 from .shell import Shell
 
@@ -57,6 +57,21 @@ def probe_privilege(scene: Scene) -> Reading:
         detail = "sudo -n needs a password; if the rules are installed, their file must sort last in /etc/sudoers.d"
         return Reading([Verdict("privilege", "blocked", "NO-ROOT", detail, exits.TOOL_FAILURE)])
     return passed("privilege")
+
+
+def probe_power(scene: Scene) -> Reading:
+    """No transaction on a battery under `min_battery`, and none on a battery without a shutdown lock (power.py).
+
+    A desktop has no battery and is never stopped. Without systemd-inhibit on mains the run goes, and the verdict says so.
+    """
+    if reason := power.low(scene.config):
+        return Reading([Verdict("power", "blocked", "LOW-BATTERY", reason, exits.BLOCKED)])
+    if not scene.sh.has("systemd-inhibit"):
+        error = "systemd-inhibit is not installed"
+        if power.on_battery():
+            return Reading([Verdict("power", "blocked", "NO-INHIBITOR", power.no_lock_on_battery(error), exits.BLOCKED)])
+        return passed("power", power.no_lock_on_mains(error))
+    return passed("power")
 
 
 def probe_conditions(scene: Scene) -> Reading:
@@ -179,6 +194,7 @@ def probe_smoke(scene: Scene) -> Reading:
 
 PROBES: tuple[Callable[[Scene], Reading], ...] = (
     probe_privilege,
+    probe_power,
     probe_conditions,
     probe_keep,
     probe_lock,
@@ -192,7 +208,7 @@ PROBES: tuple[Callable[[Scene], Reading], ...] = (
 
 
 # What stops a run before it changes anything, with nobody needed to say so: the timer reads these before it opens a window.
-GATES: tuple[Callable[[Scene], Reading], ...] = (probe_conditions, probe_keep, probe_news)
+GATES: tuple[Callable[[Scene], Reading], ...] = (probe_conditions, probe_keep, probe_news, probe_power)
 
 
 def held(scene: Scene, probes: tuple[Callable[[Scene], Reading], ...] = GATES) -> Verdict | None:

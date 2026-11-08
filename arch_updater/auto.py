@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import aur_handoff, briefs, census, discover, dotfiles, exits, pacnew, repairs, restarts, share_report, stores, tis, watch
+from . import aur_handoff, briefs, census, discover, dotfiles, exits, pacnew, power, repairs, restarts, share_report, stores, tis, watch
 from .cve import scan_cves
 from .engine import STATE_ROOT, CommandResult, _write_json, load_json
 from .exits import Stopped
@@ -104,6 +104,8 @@ class World:
         self.interrupted = False  # Ctrl-C, SIGTERM or SIGHUP ended the run: the running command was let finish, nothing else ran
         self.child_stopped: bool | None = None  # of the command that was running then: did a signal end it (None: none was running)
         self.looks = 0
+        self.unit = False  # inside one dotfiles repository's steps: they are not cut in half by a battery that falls
+        self.lock: power.Inhibitor | None = None  # the shutdown and sleep lock, taken before the first transaction, held to the end of the run
         self.watcher: Callable[[str, dict[str, Any]], None] = lambda kind, details: None  # someone following the run live
 
     # ── evidence ────────────────────────────────────────────────────────────
@@ -119,7 +121,44 @@ class World:
     def trace(self, source: str, target: str, value: int) -> None:
         self.note("token", source=source, target=target, value=value)
 
+    def permit(self, unit: bool = False) -> tuple[str, str] | None:
+        """Before work that changes the machine: (case, reason) when it must not start now, else None, with the lock held.
+
+        The lock is taken at the first such work and kept to the end of the run (release_power), so no shutdown, sleep
+        or lid between two commands of the run finds it free; one whose helper died is taken again here. Nothing is
+        guessed from a command line: every command of the run, an installer and a replayed fix included, is covered.
+        Inside a `unit` (a dotfiles repository, whose steps must not be cut in half) the battery is not asked again and a
+        lost lock is only noted: the unit's start asked.
+        """
+        if self.dry_run:
+            return None
+        if not unit and (reason := power.low(self.config)):
+            return "LOW-BATTERY", reason
+        if self.lock is None or not self.lock.held:
+            self.release_power()
+            self.lock = power.start("updating packages and boot files; a shutdown now can leave the system unbootable")
+        if not self.lock.held:
+            if not unit and power.on_battery():
+                return "NO-INHIBITOR", power.no_lock_on_battery(self.lock.error)
+            self.held["power"] = power.no_lock_on_mains(self.lock.error)
+        return None
+
+    def in_unit(self, work: Callable[..., Any], *args: Any) -> Any:
+        self.unit = True
+        try:
+            return work(*args)
+        finally:
+            self.unit = False
+
+    def release_power(self) -> None:
+        if self.lock is not None:
+            self.lock.release()
+
     def command(self, argv: list[str], timeout: int | None = None) -> CommandResult:
+        if (refused := self.permit(unit=self.unit)) is not None:  # repairs, replays and installers meet the same gate as the stores
+            self.note("power", case=refused[0], reason=refused[1], argv=argv[:3])
+            self.held["power"] = refused[1]
+            return CommandResult(list(argv), 75, f"arch-update: not started, {refused[1]}\n")
         log = self.run_dir / "run.log"
         result = self.sh.logged(argv, log) if timeout is None else self.sh.logged(argv, log, timeout)
         if self.sh.interrupted:  # Ctrl-C (or the screen's SIGHUP) while it ran: it has ended now, and nothing else is started
@@ -181,6 +220,10 @@ class World:
             argv = self._argv(store)
             if argv is None:
                 continue
+            if (refused := self.permit()) is not None:
+                self.note("power", case=refused[0], reason=refused[1], store=store.name)
+                self._fail(store.name, self._case(refused[0]), refused[1])  # a battery that drained since the look, or no lock
+                continue
             if not self.kept and not self._keep():
                 break  # no record, no update
             before = self.sh.capture(list(store.listing), timeout=120)
@@ -213,8 +256,12 @@ class World:
         for repo in wanted:
             if not self.kept:
                 break  # no record, no update
+            if (refused := self.permit()) is not None:  # an installer is a transaction too: same lock, same battery rule
+                self.note("power", case=refused[0], reason=refused[1], store=repo.name)
+                self._fail(repo.name, self._case(refused[0]), refused[1])
+                continue
             self.note("store", name=repo.name, phase="start")
-            outcome = dotfiles.update(self, repo, fetched.get(repo.path))
+            outcome = self.in_unit(dotfiles.update, self, repo, fetched.get(repo.path))
             self.note("store", name=repo.name, phase="done", changed=int(outcome.moved), ok=not outcome.case, replayed=outcome.replayed)
             self.replayed += outcome.replayed
             if outcome.held:
@@ -582,6 +629,7 @@ def run_auto(
             world.child_stopped = getattr(stop, "child_stopped", None)
         except Exception as exc:  # whatever broke, the week ends in a report, not a traceback
             out, crash = 0, f"{type(exc).__name__}: {exc}"
+        world.release_power()  # the last command has ended; what follows only reads and writes the report
         try:
             written = world.write_briefs()
         except OSError:  # a brief that cannot be written must not lose the report
@@ -701,7 +749,11 @@ def run_dotfiles(only: str | None = None, sh: Shell | None = None) -> int:
         run_id, run_dir = _new_run_dir(datetime.now().astimezone().strftime("auto-%Y%m%dT%H%M%S%z"))
         world = World(sh, config, census.load(STATE_ROOT), run_id, run_dir)
         for repo in wanted:
-            outcome = dotfiles.update(world, repo)
+            if (refused := world.permit()) is not None:
+                print(f"{repo.name}: {refused[0]}: {refused[1]}")
+                world._fail(repo.name, world._case(refused[0]), refused[1])
+                continue
+            outcome = world.in_unit(dotfiles.update, world, repo)
             state = outcome.case or ("moved to " + outcome.target if outcome.moved else "up to date")
             print(f"{repo.name}: {state}" + (f" (replayed {', '.join(outcome.replayed)})" if outcome.replayed else ""))
             if outcome.case:
@@ -710,6 +762,7 @@ def run_dotfiles(only: str | None = None, sh: Shell | None = None) -> int:
                 world._fail(repo.name, world._case(outcome.case), outcome.output)
             else:
                 dotfiles.visited(repo, STATE_ROOT)
+        world.release_power()
         for store, folder in world.write_briefs().items():
             print(f"  brief: {folder}/brief.md")
         return 1 if world.failed else 0

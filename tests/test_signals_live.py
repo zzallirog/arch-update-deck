@@ -26,7 +26,7 @@ REPO = Path(__file__).resolve().parent.parent
 DRIVER = """
 import os, sys
 from pathlib import Path
-from arch_updater import auto, main, repairs, restarts, watch
+from arch_updater import auto, main, quiet, repairs, restarts, watch
 from arch_updater.shell import Shell
 
 def offline(self, url, limit=1 << 20, timeout=30):
@@ -37,6 +37,7 @@ Shell.resolves = lambda self, host="archlinux.org": True
 Shell.free_bytes = lambda self, path: 100 * 1024**3
 repairs.PACMAN_LOCK = Path(os.environ["TEST_LOCK"])
 restarts.PROC = Path(os.environ["TEST_PROC"])
+quiet.SYS = Path(os.environ["TEST_PROC"])  # no power supplies: a laptop on a low battery would stop this run, and the real /sys is not this test's
 watch.snapshot = lambda **kwargs: {"pacnew": []}
 watch.attest = lambda **kwargs: {"issues": []}
 auto.scan_cves = lambda: {"available": False}

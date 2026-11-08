@@ -43,7 +43,7 @@ class Machine(Shell):
     """A machine where everything works; a test breaks one thing."""
 
     def __init__(self, *tools):
-        self.tools = {"pacman", "yay", "notify-send", "arch-update-aur-install", *tools}
+        self.tools = {"pacman", "yay", "notify-send", "arch-update-aur-install", "systemd-inhibit", *tools}
         self.packages = ["a 1"]
         self.fail: dict[str, list] = {}  # store or command name -> results that replace success
         self.ran: list[list[str]] = []  # commands that change the machine
@@ -249,7 +249,7 @@ def test_a_broken_probe_does_not_silence_the_others(box) -> None:
     report = box.run(dry_run=True)
     statuses = {verdict["probe"]: verdict["status"] for verdict in report["verdicts"]}
     assert statuses.pop("broken") == "unknown"
-    assert set(statuses) == {"privilege", "keep", "lock", "disk", "dns", "news", "database", "machine", "smoke"}
+    assert set(statuses) == {"privilege", "power", "keep", "lock", "disk", "dns", "news", "database", "machine", "smoke"}
     assert set(statuses.values()) == {"pass"}
     assert report["out"] == 0, "unknown is never green"
 

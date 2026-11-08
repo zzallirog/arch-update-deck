@@ -68,6 +68,7 @@ BY_HAND_ONLY = f"nothing for the update to do; by hand: {auto.AUR_BY_HAND}"
 # What each check is called on screen; a condition from the config keeps the name its owner gave it.
 CHECKS = {
     "privilege": "root access",
+    "power": "power",
     "conditions": "config",
     "keep": "backup record",
     "lock": "pacman is busy",
@@ -400,6 +401,8 @@ def summary(report: dict[str, Any], changes: list[Row] = ()) -> tuple[str, list[
         lines.append(f"{ink(GREY, 'AUR waits for you; by hand: ')}{ink(WHITE, auto.AUR_BY_HAND)}")
     if held.get("aur_too_fresh"):
         lines.append(ink(GREY, f"changed in AUR too recently, held this week: {', '.join(held['aur_too_fresh'])}"))
+    if held.get("power"):  # no lock against a shutdown or a sleep, or an update that was not started for lack of battery
+        lines.append(f"{ink(GREY, 'power: ')}{ink(WHITE, clean(held['power']))}")
     for line in held.get("ignored") or []:  # "name old -> new", from pacman -Qu
         lines.append(f"{ink(GREY, 'held by IgnorePkg or IgnoreGroup in pacman.conf, a partial update: ')}{ink(WHITE, clean(line))}")
     for line in held.get("aur_by_hand") or []:  # "name: reason", built from the AUR's answer
