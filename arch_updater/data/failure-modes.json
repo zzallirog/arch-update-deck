@@ -435,6 +435,28 @@
       "automatic": false,
       "fix": "arch-update news",
       "origin": "official"
+    },
+    {
+      "id": "LOW-BATTERY",
+      "match": "",
+      "classify_output": false,
+      "stage": "watch",
+      "meaning": "The machine runs on its battery and the charge is under the limit (`min_battery` in auto.json, 30 by default), so no package or boot transaction is started.",
+      "response": "Nothing is changed. A power-off in the middle of a transaction can leave a half-installed system, and an empty battery is one. Plug in the charger; the next run starts by itself. The same rule stops `arch-update kernel` and `arch-update rollback`. A desktop has no battery and is never stopped.",
+      "automatic": false,
+      "fix": "arch-update auto --dry-run",
+      "origin": "official"
+    },
+    {
+      "id": "NO-INHIBITOR",
+      "match": "",
+      "classify_output": false,
+      "stage": "watch",
+      "meaning": "The machine runs on its battery and the lock against shutdown, sleep and the lid (systemd-inhibit) is missing or could not be taken.",
+      "response": "Nothing is changed. Without the lock a suspend or a power-off can come in the middle of a transaction. Plug in the charger and the run goes on without the lock, with a line in the report; or make systemd-inhibit work (the fix lists the locks held now).",
+      "automatic": false,
+      "fix": "systemd-inhibit --list",
+      "origin": "official"
     }
   ]
 }

@@ -60,6 +60,14 @@ def private_home(tmp_path, monkeypatch):
 
     monkeypatch.setattr(restarts, "PROC", tmp_path / "proc")  # the restart scan after an update reads /proc too
     monkeypatch.setattr(quiet, "SYS", tmp_path / "sys")
+    # No test takes a real logind lock: a run that reaches a transaction would hold the live machine's shutdown for a moment.
+    # A test of the lock itself puts its own `start` in place.
+    from arch_updater import power
+
+    class Held(power.Inhibitor):
+        held = True
+
+    monkeypatch.setattr(power, "start", lambda why, wait=10.0: Held())
     for name, module in list(sys.modules.items()):
         if not name.startswith("arch_updater."):
             continue
