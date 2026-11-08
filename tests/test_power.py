@@ -731,33 +731,58 @@ def test_scan_sessions_is_not_run_on_a_battery_whatever_the_charge(tmp_path, mon
     monkeypatch.setattr(module, "write_session_report", lambda out: scanned.append(out) or {"markdown": str(tmp_path / "r.md"), "report": {"counts": {"sessions_with_proven_changes": 0}}})
     (tmp_path / "r.md").write_text("report\n")
     supplies(tmp_path, battery=("Discharging", 95), mains=False)
-    assert cli.main(["scan-sessions", "--output-dir", str(tmp_path)]) == 0
+    assert cli.main(["scan-sessions", "--output-dir", str(tmp_path)]) == exits.SKIPPED
     assert scanned == [] and "scan-sessions was not run" in capsys.readouterr().err
+    assert cli.main(["scan-sessions", "--json"]) == exits.SKIPPED
+    held = json.loads(capsys.readouterr().out)
+    assert held["ran"] is False and "battery" in held["held"]
     supplies(tmp_path, battery=("Charging", 95), mains=True)
     assert cli.main(["scan-sessions", "--output-dir", str(tmp_path)]) == 0 and len(scanned) == 1
 
 
 # ── P4: the timer waits for the charger, a person is asked ─────────────────
 
-@pytest.mark.parametrize("charge", [95, 35, 31])
-def test_the_timer_on_a_battery_waits_for_the_charger_not_for_the_threshold(box, logind, capsys, charge) -> None:
-    from arch_updater import day
-
-    supplies(box.root, battery=("Discharging", charge), mains=False)
-    assert day.scheduled(box.sh) == exits.SKIPPED
-    assert box.sh.ran == [] and logind.opened == 0
-    assert "waits for the charger" in capsys.readouterr().out
-
-
-def test_the_timer_never_goes_onto_a_battery_when_the_wait_is_long_but_tells_the_person(box, logind, capsys) -> None:
+def timer_on_battery(box, charge, days_waited):
+    """One fire of the weekly timer, `days_waited` days after the run first found the machine on its battery."""
     from arch_updater import day, quiet
 
-    supplies(box.root, battery=("Discharging", 95), mains=False)
-    (day.STATE_ROOT).mkdir(parents=True, exist_ok=True)
-    (day.STATE_ROOT / quiet.WAITING).write_text(json.dumps({"since": time.time() - (quiet.MAX_WAIT_DAYS + 1) * 86400, "reason": "on battery"}))
-    assert day.scheduled(box.sh) == exits.SKIPPED
-    assert box.sh.ran == [] and any(call[0] == "notify-send" for call in box.sh.calls + box.sh.ran), "the person is told"
-    assert "waits for the charger" in capsys.readouterr().err
+    supplies(box.root, battery=("Discharging", charge), mains=False)
+    day.STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    if days_waited:
+        (day.STATE_ROOT / quiet.WAITING).write_text(json.dumps({"since": time.time() - days_waited * 86400 - 5, "reason": "on battery"}))
+    return day.scheduled(box.sh)
+
+
+@pytest.mark.parametrize("charge", [95, 35, 31])
+def test_the_timer_on_a_battery_waits_for_the_charger_at_first(box, logind, capsys, charge) -> None:
+    assert timer_on_battery(box, charge, 0) == exits.SKIPPED
+    assert box.sh.ran == [] and logind.opened == 0
+    assert "waiting, on battery" in capsys.readouterr().out
+
+
+def test_the_wait_for_the_charger_ends_after_three_days_and_the_security_update_goes(box, logind, capsys) -> None:
+    assert timer_on_battery(box, 80, 3) == 0
+    assert box.sh.ran.count(UPGRADE) == 1, "an unpatched machine is not safe: the repository update goes"
+    assert box.sh.count("aur") == 0, "the build still waits for the charger"
+    assert "waited 3 days (on battery)" in capsys.readouterr().out
+
+
+def test_after_the_wait_a_battery_under_the_floor_still_stops_the_run(box, logind) -> None:
+    assert timer_on_battery(box, 12, 3) == exits.BLOCKED
+    assert box.sh.ran == []
+
+
+def test_the_wait_is_not_over_on_the_second_day(box, logind) -> None:
+    assert timer_on_battery(box, 80, 2) == exits.SKIPPED and box.sh.ran == []
+
+
+def test_the_run_after_the_wait_is_under_the_battery_ceiling(box, logind, monkeypatch) -> None:
+    from arch_updater import quiet
+
+    asked = []
+    monkeypatch.setattr(quiet, "calm", lambda config, *a, **k: asked.append(config) or [])
+    timer_on_battery(box, 80, 3)
+    assert asked, "calm() is reached on a battery, where its 50 % quota applies"
 
 
 def test_the_timer_on_mains_updates(box, logind) -> None:
@@ -889,3 +914,39 @@ def test_a_helper_process_killed_between_two_stores_on_a_battery_that_cannot_be_
     started, seen = killed_between_two_stores(box, monkeypatch, tmp_path, script, battery=True)
     report = box.run()
     assert seen == [] and len(started) == 2 and ("flatpak", "NO-INHIBITOR") in cases_of(report)
+
+
+# ── what "on battery" means, and the limit as text ─────────────────────────
+
+@pytest.mark.parametrize("status", ["Charging", "Full", "Not charging"])
+def test_a_charger_the_mains_supply_does_not_show_is_still_a_charger(box, logind, status) -> None:
+    """A USB-C charger is a supply of its own and the mains one stays at 0: the battery's own status decides."""
+    supplies(box.root, battery=(status, 15), mains=False)
+    assert power.on_battery(box.root / "sys") is False
+    assert power.low({}, box.root / "sys") is None and power.heavy_hold(box.root / "sys") is None
+    report = box.run()
+    assert box.sh.ran.count(UPGRADE) == 1 and not any(item["case"] == "LOW-BATTERY" for item in report["trouble"])
+
+
+def test_the_timer_does_not_wait_for_a_charger_that_is_plugged_in_unseen(box, logind) -> None:
+    from arch_updater import day
+
+    supplies(box.root, battery=("Charging", 60), mains=False)
+    assert day.scheduled(box.sh) == 0 and box.sh.ran.count(UPGRADE) == 1
+
+
+def test_a_battery_that_says_discharging_is_on_battery_even_with_the_mains_online(box) -> None:
+    supplies(box.root, battery=("Discharging", 60), mains=True)
+    assert power.on_battery(box.root / "sys") is True
+
+
+@pytest.mark.parametrize(("written", "limit"), [("20", 20), ("50", 50), (" 40 % ", 40), ("0", 0), ("101", 30), ("abc", 30), ("-5", 30), ("2.5", 30)])
+def test_min_battery_written_as_text_is_read(written, limit) -> None:
+    assert power.threshold({"min_battery": written}) == limit
+
+
+def test_a_string_limit_decides_a_run(box, logind) -> None:
+    box.config(min_battery="50")
+    supplies(box.root, battery=("Discharging", 40), mains=False)
+    report = box.run()
+    assert box.sh.ran == [] and any(item["case"] == "LOW-BATTERY" for item in report["trouble"])

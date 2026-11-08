@@ -44,7 +44,7 @@ starter one first and says so in a dim line under `PENDING`.
 
  TOTAL    1 from repositories · 1 from AUR (by hand: yay -Sua)
 
- MACHINE  fine · 9 checks
+ MACHINE  fine · 10 checks
  PENDING  nothing since last time
 
  UPDATE NOW?  [y] yes   [N] not now   Enter means no
@@ -269,10 +269,20 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   (`held.power` and `held.aur` name the reason; the repository update still runs), and
   `arch-update scan-sessions` does nothing and says why. They wait for the charger.
   `power.heavy_hold()` is the one question for any heavy check added later.
-- The timer's run on a battery waits for the charger, not for the 30 % threshold, and
-  the 3-day limit of the quiet wait does not send it onto the battery: every 3 days the
-  person gets a notice. A run started by hand on a battery asks first ("ON BATTERY, 72%.
-  CONTINUE?" in Update Day, one line in `arch-update auto` at a terminal).
+- The timer's run on a battery waits for the charger, as it did before, for 3 days at
+  most; then the repository update goes (a machine that never updates is not safe),
+  provided the charge is not under `min_battery`. Only the heavy work (the AUR build,
+  the rebuild, `scan-sessions`) stays held for as long as the machine is on its battery.
+  A run started by hand on a battery asks first ("ON BATTERY, 72%. CONTINUE?" in
+  Update Day, one line in `arch-update auto` at a terminal).
+- "On battery" is decided by the battery's own status first: `Discharging` is on
+  battery, `Charging`, `Full` and `Not charging` are not, whatever the mains supply
+  reads (a USB-C charger leaves it at 0). Only when no battery says, an offline mains
+  supply means on battery.
+- `min_battery` may be written as text (`"20"`, `"20%"`). Anything else that is not a
+  whole number from 0 to 100 is 30.
+- `arch-update scan-sessions` held on a battery exits 80 (not a failure); with `--json`
+  it prints `{"held": "<reason>", "ran": false}`.
 - The weekly service unit has `Nice=19`, `IOSchedulingClass=idle`, `CPUQuota=50%`; the
   run's own ceiling uses nice 19 and, on a battery, at most 50 % of one CPU.
 
@@ -1281,11 +1291,12 @@ notice, at most once a month for each.
 
 The timer's run waits, and exits 80 (SKIPPED, not a failure; the timer asks
 again the next day) when a game runs (`gamescope`, `steam_app_<id>`, `wine`),
-or when `/proc/pressure/{cpu,memory,io}` says the machine is busy. It waits 3 days at most:
-then it runs anyway, under the ceiling, and says why. On battery it does not wait for
-the 3 days: it waits for the charger as long as it takes (the notice comes every 3 days;
-`"quiet": false` turns this off, and so the whole wait). A mains supply that is offline
-or a battery that says `Discharging` is "on battery"; a desktop has none. What cannot be read, and a
+or when `/proc/pressure/{cpu,memory,io}` says the machine is busy, or on battery. It
+waits 3 days at most: then it runs anyway, under the ceiling, and says why. On battery
+the run that goes after the 3 days still obeys [Power](#power): the charge must not be
+under `min_battery`, and the AUR build stays held. A battery that says `Discharging`
+is "on battery" (`Charging`, `Full` and `Not charging` are not); where no battery
+says, a mains supply that is offline is; a desktop has neither. What cannot be read, and a
 setting that makes no sense, counts as "go". The wait is about noise and load; whether a
 run may start at all on a low battery is a separate rule that no wait lifts (see
 [Power](#power)).
@@ -1296,7 +1307,7 @@ and the fans. `systemctl --user set-property --runtime` gives the service a
 quarter of its physical cores, one thread each (`AllowedCPUs`, a cpuset, which
 holds under any scheduler), 60 % of a CPU per core (`CPUQuota`, enforced by
 the kernel's fair scheduler only), `CPUWeight=20`, `IOWeight=20`, then idle I/O
-and nice 19; on a battery the quota is 50 % of one CPU at most. The unit file itself
+and nice 19; on a battery (the run that goes after the 3 days) the quota is 50 % of one CPU at most. The unit file itself
 has `Nice=19`, `IOSchedulingClass=idle` and `CPUQuota=50%`, for the time before the
 run has set its own. Everything the run starts inherits them: `sudo`, pacman and its
 hooks, a build. A large AUR build takes longer this way. systemd keeps such a
@@ -1336,8 +1347,8 @@ closes and the lock is let go. Update Day runs the same sequence as the timer, s
 holds the lock too.
 
 The battery. On a machine with a battery of its own (`/sys/class/power_supply/*/type`
-is `Battery` and its `scope` is not `Device`) that runs on it (a battery says
-`Discharging`, or the mains supply is offline), a transaction is not started when the
+is `Battery` and its `scope` is not `Device`) that runs on it (see "On battery" in Changed in 0.20.07: the
+battery's own status first), a transaction is not started when the
 charge is under `min_battery`. The check is one of the eleven checks (`power`, case
 `LOW-BATTERY`, exit 20), so the timer, `auto` and Update Day stop before anything is
 changed, and it is asked again before each store, each dotfiles repository and each
