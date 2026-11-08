@@ -60,9 +60,8 @@ def excerpts(output: str, limit: int = EXCERPT_LINES) -> list[str]:
 
 
 def suggested_match(output: str) -> str:
-    """The pattern the census itself would use for this failure: its signature line, numbers loosened."""
-    line = census.signature(output)
-    return census._VOLATILE.sub(lambda _: r"\d+", re.escape(line))
+    """The pattern the census itself would use for this failure: its signature line without this machine's names, numbers loosened."""
+    return census.pattern_for(output)[0]
 
 
 def write(

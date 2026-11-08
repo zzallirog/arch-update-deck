@@ -285,6 +285,11 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   it prints `{"held": "<reason>", "ran": false}`.
 - The weekly service unit has `Nice=19`, `IOSchedulingClass=idle`, `CPUQuota=50%`; the
   run's own ceiling uses nice 19 and, on a battery, at most 50 % of one CPU.
+- Census signatures no longer hold paths, URLs, package file names, versions or
+  hashes, and cases recorded with them are recomputed and merged when the census is
+  loaded. The tool's own refusals (`arch-update: ... refused`) are the new case
+  `TOOL-REFUSED`; they win over every other case the output also matches, and are
+  never filed as a build failure or as a new `LOCAL-` case.
 
 ### Changed in 0.20.06
 
@@ -876,9 +881,9 @@ The sequence is the program in `arch_updater/control.tis`, executed by
 
 `arch_updater/data/failure-modes.json` is the shipped catalogue (installed under
 `~/.local/share/arch-update-deck/arch_updater/data/`). An entry has an `id`, a
-`meaning`, a `fix`, optionally a `repair`, and for twenty-seven of the forty-one a
+`meaning`, a `fix`, optionally a `repair`, and for twenty-eight of the forty-four a
 `match` (a regular expression searched in the failing command's output); the
-other fourteen have none and are raised by the checks. The `fix` is one command to run by
+other sixteen have none and are raised by the checks. The `fix` is one command to run by
 hand, on one line, readable by `sh`, with no placeholder. It is never the command
 that just failed: no `fix` is `pacman -Syu`, `yay -Sua`, `paru -Sua`,
 `flatpak update`, `snap refresh` or `arch-update auto` (with or without `sudo`),
@@ -948,6 +953,7 @@ The shipped cases (`arch-update vault` prints them with their `meaning`):
 | `ARCH-NEWS-MANUAL` | - | `arch-update news` |
 | `LOW-BATTERY` | - | `arch-update auto --dry-run` |
 | `NO-INHIBITOR` | - | `systemd-inhibit --list` |
+| `TOOL-REFUSED` | - | `grep -h "arch-update:.*refused" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 3` |
 
 `NO-ROOT` and `SUDO-TIMESTAMP-EXPIRED` share the sudoers fix: it writes the rules
 to a temporary file, checks it with `visudo -cf` and only then installs it, so
@@ -956,7 +962,12 @@ rules that were never checked are not written to `/etc`.
 When a store fails and no entry matches its output, the failure is added to
 `~/.local/state/arch-updater/census.json` as a new entry `LOCAL-<hash>`. Its
 `match` is the line that identified the failure (the last line containing
-"error", else the last line) with numbers loosened. Its `fix` is
+"error", else the last line) with numbers loosened and with everything that is
+only this machine's taken out: paths, URLs, package file names, `name-version-release`
+words and hashes become `<path>`, `<url>`, `<pkg>` and `<hash>` (a run of paths is one).
+Two failures of one class with other packages are therefore one case and `seen` is 2.
+A case recorded before this rule is recomputed when the census is loaded, and the
+ones that now say the same thing are merged (`seen` added up). Its `fix` is
 `arch-update brief`: the brief shows the lines that matter and the `learn`
 command that saves a fix. Its `meaning` says when and where it was first seen,
 and `seen` counts how often it came back. It is recognised on later runs. It has

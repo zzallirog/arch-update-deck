@@ -457,6 +457,16 @@
       "automatic": false,
       "fix": "systemd-inhibit --list",
       "origin": "official"
+    },
+    {
+      "id": "TOOL-REFUSED",
+      "match": "(?im)^arch-update: .*\\brefused\\b",
+      "stage": "any",
+      "meaning": "The tool refused a command on purpose (its own guard, for example the root shim that lets an unattended AUR update only install packages). It is not a build failure and nothing is wrong with the package.",
+      "response": "Read the refusal line: it names the command that was not run and why. Nothing was changed by that command. The refusal wins over every other case the output also matches, so the build log above it is not blamed. Run the refused step yourself if you mean it.",
+      "automatic": false,
+      "fix": "grep -h \"arch-update:.*refused\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 3",
+      "origin": "official"
     }
   ]
 }

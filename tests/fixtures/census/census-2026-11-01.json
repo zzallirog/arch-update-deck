@@ -1,0 +1,24 @@
+[
+  {
+    "id": "LOCAL-086bf894",
+    "match": "\\->\\ error\\ installing:\\ \\[/home/user01/\\.cache/yay/darkly\\-bin/darkly\\-bin\\-(?:0x[0-9a-fA-F]+|\\d+)\\.(?:0x[0-9a-fA-F]+|\\d+)\\.(?:0x[0-9a-fA-F]+|\\d+)\\-(?:0x[0-9a-fA-F]+|\\d+)\\-x(?:0x[0-9a-fA-F]+|\\d+)_(?:0x[0-9a-fA-F]+|\\d+)\\.pkg\\.tar\\.zst\\ /home/user01/\\.cache/yay/powershell\\-bin/powershell\\-bin\\-(?:0x[0-9a-fA-F]+|\\d+)\\.(?:0x[0-9a-fA-F]+|\\d+)\\.(?:0x[0-9a-fA-F]+|\\d+)\\-(?:0x[0-9a-fA-F]+|\\d+)\\-x(?:0x[0-9a-fA-F]+|\\d+)_(?:0x[0-9a-fA-F]+|\\d+)\\.pkg\\.tar\\.zst\\ /home/user01/\\.cache/yay",
+    "repair": null,
+    "fix": "arch-update brief",
+    "meaning": "first seen 2026-10-22 in aur: -> error installing: [/home/user01/.cache/yay/darkly-bin/darkly-bin-0.5.41-1-x86_64.pkg.tar.zst /home/user01/.cache/yay/powershell-bin/powershell-bin-7.6.7-1-x86_64.pkg.tar.zst /home/user01/.cache/yay",
+    "classify_output": true,
+    "seen": 1,
+    "where": "",
+    "store": ""
+  },
+  {
+    "id": "LOCAL-0ee94232",
+    "match": "\\->\\ error\\ installing:\\ \\[/home/user01/\\.cache/yay/binder_linux\\-dkms/binder_linux\\-dkms\\-(?:0x[0-9a-fA-F]+|\\d+)\\.(?:0x[0-9a-fA-F]+|\\d+)\\-(?:0x[0-9a-fA-F]+|\\d+)\\-any\\.pkg\\.tar\\.zst\\ /home/user01/\\.cache/yay/r(?:0x[0-9a-fA-F]+|\\d+)\\-dkms/r(?:0x[0-9a-fA-F]+|\\d+)\\-dkms\\-(?:0x[0-9a-fA-F]+|\\d+)\\.(?:0x[0-9a-fA-F]+|\\d+)\\.(?:0x[0-9a-fA-F]+|\\d+)\\.(?:0x[0-9a-fA-F]+|\\d+)\\-(?:0x[0-9a-fA-F]+|\\d+)\\-x(?:0x[0-9a-fA-F]+|\\d+)_(?:0x[0-9a-fA-F]+|\\d+)\\.pkg\\.tar\\.zst\\]\\ \\-\\ exit\\ statu",
+    "repair": null,
+    "fix": "arch-update brief",
+    "meaning": "first seen 2026-11-01 in aur: -> error installing: [/home/user01/.cache/yay/binder_linux-dkms/binder_linux-dkms-7.1-4-any.pkg.tar.zst /home/user01/.cache/yay/r8152-dkms/r8152-dkms-2.22.1.20261021-1-x86_64.pkg.tar.zst] - exit statu",
+    "classify_output": true,
+    "seen": 1,
+    "where": "",
+    "store": ""
+  }
+]
