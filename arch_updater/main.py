@@ -324,6 +324,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(rules, end="")
                 print(consent([line for line in rules.splitlines() if not line.startswith("#")]), file=sys.stderr, end="")
                 return 0
+            if not args.dry_run and sys.stdin.isatty() and sys.stdout.isatty() and (asking := day.battery_question()):
+                if not day.confirm(asking.replace("ON BATTERY", "On battery").replace("CONTINUE?", "Continue?"), sys.stdin, sys.stdout):
+                    print("nothing was changed", file=sys.stderr)
+                    return 0
             report = run_auto(dry_run=args.dry_run)
             _json(report)
             if args.dry_run:

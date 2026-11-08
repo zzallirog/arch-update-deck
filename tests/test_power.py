@@ -7,6 +7,7 @@ as in test_quiet. The helper that takes the real lock is tested against a script
 from __future__ import annotations
 
 import io
+import json
 import os
 import stat
 import time
@@ -734,3 +735,73 @@ def test_scan_sessions_is_not_run_on_a_battery_whatever_the_charge(tmp_path, mon
     assert scanned == [] and "scan-sessions was not run" in capsys.readouterr().err
     supplies(tmp_path, battery=("Charging", 95), mains=True)
     assert cli.main(["scan-sessions", "--output-dir", str(tmp_path)]) == 0 and len(scanned) == 1
+
+
+# ── P4: the timer waits for the charger, a person is asked ─────────────────
+
+@pytest.mark.parametrize("charge", [95, 35, 31])
+def test_the_timer_on_a_battery_waits_for_the_charger_not_for_the_threshold(box, logind, capsys, charge) -> None:
+    from arch_updater import day
+
+    supplies(box.root, battery=("Discharging", charge), mains=False)
+    assert day.scheduled(box.sh) == exits.SKIPPED
+    assert box.sh.ran == [] and logind.opened == 0
+    assert "waits for the charger" in capsys.readouterr().out
+
+
+def test_the_timer_never_goes_onto_a_battery_when_the_wait_is_long_but_tells_the_person(box, logind, capsys) -> None:
+    from arch_updater import day, quiet
+
+    supplies(box.root, battery=("Discharging", 95), mains=False)
+    (day.STATE_ROOT).mkdir(parents=True, exist_ok=True)
+    (day.STATE_ROOT / quiet.WAITING).write_text(json.dumps({"since": time.time() - (quiet.MAX_WAIT_DAYS + 1) * 86400, "reason": "on battery"}))
+    assert day.scheduled(box.sh) == exits.SKIPPED
+    assert box.sh.ran == [] and any(call[0] == "notify-send" for call in box.sh.calls + box.sh.ran), "the person is told"
+    assert "waits for the charger" in capsys.readouterr().err
+
+
+def test_the_timer_on_mains_updates(box, logind) -> None:
+    from arch_updater import day
+
+    supplies(box.root, battery=("Charging", 50), mains=True)
+    assert day.scheduled(box.sh) == 0 and box.sh.ran.count(UPGRADE) == 1
+
+
+def test_update_day_asks_on_a_battery_in_its_own_frame(box, logind) -> None:
+    from arch_updater import day
+
+    box.sh.tools.add("checkupdates")
+    box.sh.fail["checkupdates"] = [ok("kwin 6.7.5-1.1 -> 6.7.5-3.1\n"), ok("")]
+    supplies(box.root, battery=("Discharging", 72), mains=False)
+    out = io.StringIO()
+    day.ask(box.sh, io.StringIO("n\n"), out, look_only=False)
+    assert "ON BATTERY, 72%. CONTINUE?" in out.getvalue() and "UPDATE NOW?" not in out.getvalue() and box.sh.ran == []
+
+
+def test_update_day_on_mains_asks_the_plain_question(box, logind) -> None:
+    from arch_updater import day
+
+    box.sh.tools.add("checkupdates")
+    box.sh.fail["checkupdates"] = [ok("kwin 6.7.5-1.1 -> 6.7.5-3.1\n"), ok("")]
+    supplies(box.root, battery=("Charging", 72), mains=True)
+    out = io.StringIO()
+    day.ask(box.sh, io.StringIO("n\n"), out, look_only=False)
+    assert "UPDATE NOW?" in out.getvalue() and "ON BATTERY" not in out.getvalue()
+
+
+def test_arch_update_auto_by_hand_on_a_battery_asks_and_a_no_runs_nothing(box, logind, monkeypatch, capsys) -> None:
+    ran = []
+    monkeypatch.setattr(cli, "run_auto", lambda **kwargs: ran.append(kwargs) or {"exit_code": 0, "wrote": "x"})
+
+    class Typed(io.StringIO):
+        def isatty(self):
+            return True
+
+    supplies(box.root, battery=("Discharging", 72), mains=False)
+    monkeypatch.setattr("sys.stdin", Typed("n\n"))
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True, raising=False)
+    assert cli.main(["auto"]) == 0 and ran == []
+    assert "On battery, 72%. Continue?" in capsys.readouterr().out
+    monkeypatch.setattr("sys.stdin", Typed("y\n"))
+    cli.main(["auto"])
+    assert len(ran) == 1

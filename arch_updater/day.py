@@ -31,7 +31,7 @@ from datetime import datetime
 from typing import Any, TextIO
 
 from . import atomic
-from . import auto, exits, home, quiet, restarts
+from . import auto, exits, home, power, quiet, restarts
 from .engine import STATE_ROOT, available_kernel_profiles, load_json, read_aur_queue, select_kernel
 from .keepalive import NOTICE as TICKET_EXPIRED, Keepalive
 from .scheduler import AUTO_UNIT
@@ -510,6 +510,18 @@ def _record(outcome: str, code: int, reason: str = "") -> None:
         atomic.write(STATE_ROOT / ASK_RESULT, json.dumps(entry) + "\n")
 
 
+def battery_question() -> str:
+    """The question for a person who starts an update on a laptop's battery, or "" off it. The AUR is not built there."""
+    try:
+        state = power.battery()
+    except Exception:  # noqa: BLE001 - a reading that breaks is not a reason to ask
+        return ""
+    if not state.on_battery:
+        return ""
+    charge = f", {state.percent}%" if state.percent is not None else ""
+    return f"ON BATTERY{charge}. CONTINUE? (no AUR build until the charger is on)"
+
+
 def confirm(question: str, stdin: TextIO = sys.stdin, out: TextIO = sys.stdout) -> bool:
     """A plain yes/no on the line below the question; anything but y or yes is no."""
     out.write(f"{question} [y/N] ")
@@ -693,7 +705,8 @@ def ask(
             screen.draw(out)
             answer("unread" if blind else "nothing-to-do", exits.BLOCKED if blind else exits.IDLE, screen.unread_reason if blind else "only the AUR waits")
             return leave(exits.BLOCKED if blind and record else exits.IDLE)
-        screen.prompt, screen.keys = f"{ink(WHITE, 'UPDATE NOW?')}  {ink(WHITE, '[y]')} {ink(GREY, 'yes')}   {ink(WHITE, '[N]')} {ink(GREY, 'not now')}   {ink(DIM, 'Enter means no')}", True
+        question = battery_question()
+        screen.prompt, screen.keys = f"{ink(WHITE, question or 'UPDATE NOW?')}  {ink(WHITE, '[y]')} {ink(GREY, 'yes')}   {ink(WHITE, '[N]')} {ink(GREY, 'not now')}   {ink(DIM, 'Enter means no')}", True
         deadline = time.monotonic() + wait
         while True:
             paint()
@@ -818,6 +831,16 @@ def scheduled(sh: Shell | None = None) -> int:
         return exits.SKIPPED
     if stop is not None and stop.case == "ARCH-NEWS-MANUAL":  # a post asks for a step by hand: nothing runs until a person has read it
         _say(sh, f"{stop.detail}; the weekly update was not run")
+        return exits.SKIPPED
+    if (config or {}).get("quiet") is not False and power.on_battery():
+        # Not the charge level that decides but the charger: a laptop on its battery may be needed by the person for hours.
+        # The wait has no end that sends the run onto the battery; after a few days the person is told.
+        waited_out = quiet.waited("on battery", STATE_ROOT) is None
+        message = "the machine runs on its battery; the update waits for the charger"
+        if waited_out:
+            _say(sh, f"{message} (for {quiet.MAX_WAIT_DAYS} days now). Plug in the charger, or update by hand: arch-update")
+        else:
+            print(f"arch-update: waiting, {message}")
         return exits.SKIPPED
     reason = quiet.gate(config)
     waiting = quiet.waited(reason, STATE_ROOT)
