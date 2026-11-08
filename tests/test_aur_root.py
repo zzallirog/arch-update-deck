@@ -183,6 +183,32 @@ def test_the_hand_over_refuses_anything_but_a_plain_install(hand, argv) -> None:
     assert aur_handoff.handoff(argv, 7, sh) == 1 and sh.typed == []
 
 
+def test_the_ignore_list_yay_passes_on_does_not_stop_the_install(hand) -> None:
+    # Live 2026-10-22, 11-01, 11-08: yay forwards the run's --ignore to pacman -U and every AUR install was refused.
+    built = package(hand / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    sh = Hand([{"Name": "app-bin", "LastModified": time.time() - 30 * 86400}])
+    argv = ["pacman", "-U", "--ignore", "darkly-bin", "--ignore", "discord-canary", "--ignore=qtengine,powershell-bin", "--noconfirm", "--config", "/etc/pacman.conf", "--", str(built)]
+    assert aur_handoff.handoff(argv, 7, sh) == 0
+    assert sh.typed == [["sudo", "-n", str(aur_handoff.SHIM)]]
+
+
+def test_a_held_package_that_was_built_anyway_is_not_installed(hand) -> None:
+    built = package(hand / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    sh = Hand([{"Name": "app-bin", "LastModified": 0}])
+    argv = ["pacman", "-U", "--ignore", "app-bin", "--noconfirm", "--config", "/etc/pacman.conf", "--", str(built)]
+    assert aur_handoff.handoff(argv, 7, sh) == 1 and sh.typed == []
+
+
+@pytest.mark.parametrize("argv", [
+    ["pacman", "-U", "--noconfirm", "--config", "/etc/pacman.conf", "--ignore", "--", "x"],
+    ["pacman", "-U", "--ignore", "a", "--overwrite", "*", "--noconfirm", "--config", "/etc/pacman.conf", "--", "x"],
+    ["pacman", "-U", "--ignore", "a", "--noconfirm", "--config", "/etc/pacman.conf", "--"],
+])
+def test_setting_the_ignore_list_aside_lets_nothing_else_through(hand, argv) -> None:
+    sh = Hand([])
+    assert aur_handoff.handoff(argv, 7, sh) == 1 and sh.typed == []
+
+
 def test_reason_marks_are_answered_without_root(hand) -> None:
     sh = Hand([])
     assert aur_handoff.handoff(["pacman", "-D", "-q", "--asexplicit", "--noconfirm", "--config", "/etc/pacman.conf", "--", "x"], 7, sh) == 0 and sh.typed == []

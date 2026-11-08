@@ -31,10 +31,40 @@ INSTALL = ["pacman", "-U", "--noconfirm", "--config", "/etc/pacman.conf", "--"]
 REASONS = (["pacman", "-D", "-q", "--asexplicit"], ["pacman", "-D", "-q", "--asdeps"])
 
 
+def held_back(argv: list[str]) -> tuple[list[str], set[str]]:
+    """The command without the --ignore list yay passes on, and the names in it.
+
+    The run tells yay `--ignore` for the packages it holds back, and yay hands
+    the same flags to `pacman -U`. For named files they change nothing; the
+    shim runs its own pacman line. They are set aside here so a plain install
+    is still recognised, and kept to check that no held package was built.
+    Only flags before `--` count; a trailing `--ignore` with no name is left in
+    and refused.
+    """
+    end = argv.index("--") if "--" in argv else len(argv)
+    rest: list[str] = []
+    names: set[str] = set()
+    i = 0
+    while i < end:
+        arg = argv[i]
+        if arg == "--ignore" and i + 1 < end:
+            names.update(filter(None, argv[i + 1].split(",")))
+            i += 2
+            continue
+        if arg.startswith("--ignore="):
+            names.update(filter(None, arg.split("=", 1)[1].split(",")))
+            i += 1
+            continue
+        rest.append(arg)
+        i += 1
+    return rest + argv[end:], names
+
+
 def handoff(argv: list[str], min_age_days: float, sh: Shell | None = None) -> int:
     sh = sh or Shell()
     if any(argv[: len(reason)] == reason for reason in REASONS):
         return 0
+    argv, ignored = held_back(argv)
     if argv[: len(INSTALL)] != INSTALL or len(argv) == len(INSTALL):
         print(f"arch-update: an unattended AUR update only installs packages; refused: {' '.join(argv)[:300]}", file=sys.stderr)
         return 1
@@ -44,6 +74,9 @@ def handoff(argv: list[str], min_age_days: float, sh: Shell | None = None) -> in
         names = [aur_root.inspect(path, installed)["name"] for path in files]
     except aur_root.Refused as refusal:
         print(f"arch-update: refused, nothing installed:\n{refusal}", file=sys.stderr)
+        return 1
+    if held := sorted(ignored.intersection(names)):
+        print(f"arch-update: a package this run holds back was built anyway, nothing installed: {', '.join(held)}", file=sys.stderr)
         return 1
     answer = sh.post(AUR_RPC, [("arg[]", name) for name in names])
     if answer.get("type") != "multiinfo":

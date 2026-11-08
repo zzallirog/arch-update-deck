@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.05. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.06. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -252,6 +252,15 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.06
+
+- The unattended AUR update installs again when the run holds some AUR packages
+  back. yay passed the run's `--ignore` list on to `pacman -U`, and the hand-over
+  to the root shim refused anything but an exact plain install, so since 0.19.0 a
+  run with a held package built the rest and then installed nothing.
+  The `--ignore` list is now set aside before that check (it changes nothing for
+  named files), and a held package that was built anyway is refused.
 
 ### Changed in 0.20.05
 
