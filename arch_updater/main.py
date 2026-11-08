@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import __version__, aur_handoff, auto, briefs, day, discover, exits, news, power, rollback
+from . import __version__, aur_handoff, auto, briefs, day, discover, exits, news, power, rollback, witness
 from .auto import consent, init_config, run_auto, status, sudoers_rules
 from .cve import scan_cves
 from .engine import STATE_ROOT, VAULT_PATH, attest, available_kernel_profiles, classify_failures, default_kernel_package, detect_kernel, load_json, select_kernel, snapshot
@@ -177,9 +177,11 @@ def build_parser() -> argparse.ArgumentParser:
     brief_parser.add_argument("folder", nargs="?", type=Path, help="A brief folder; default: the newest one with no fix saved")
     learn_parser = subparsers.add_parser("learn", help="Save a fix that worked as a census case: the next run replays it by itself")
     learn_parser.add_argument("--brief", type=Path, help="The brief the fix answers; default: the newest one with no fix saved")
-    learn_parser.add_argument("--match", required=True, help="A Python regex that finds the failure in the brief's failure.log")
-    learn_parser.add_argument("--how", required=True, help="One sentence: what was wrong and what fixed it")
-    learn_parser.add_argument("--command", dest="fix", required=True, help="One sh command that does the fix again")  # dest: "command" names the subcommand
+    learn_parser.add_argument("--match", help="A Python regex that finds the failure in the brief's failure.log")
+    learn_parser.add_argument("--how", help="One sentence: what was wrong and what fixed it")
+    learn_parser.add_argument("--command", dest="fix", help="One sh command that does the fix again")  # dest: "command" names the subcommand
+    learn_parser.add_argument("--accept", metavar="ID", help="Instead of the three above: take a fix somebody ran by hand once (arch-update census lists them), run it on a failure it matches, and keep it as a replay if the failed step then passes")
+    learn_parser.add_argument("--yes", action="store_true", help="With --accept: do not ask first (the command removes or installs packages)")
     census_parser = subparsers.add_parser("census", help="What this machine learned; --share hands it upstream so everyone's updates fix themselves")
     census_parser.add_argument("--share", action="store_true", help="Open a GitHub issue with it filled in (home folder and login taken out); you press Submit")
     census_parser.add_argument("--json", action="store_true", help="With --share: print the JSON instead of opening a page")
@@ -242,7 +244,29 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             print(briefs.show(folder), end="")
             return 0
+        if command == "learn" and args.accept:
+            case, found = briefs.witnessed_for(args.accept)
+            folder = args.brief or found
+            if folder is None:
+                raise ValueError("no brief holds a failure this fix answers; name one with --brief")
+            exact = witness.instantiate(case, (folder / "failure.log").read_text(encoding="utf-8"))
+            if exact is None:
+                raise ValueError(f"the failure in {folder / 'failure.log'} is not one this fix answers")
+            command_line = witness.unattended(exact[1])
+            print(f"This runs now, then the failed step again: {command_line}")
+            if not args.yes:
+                if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                    raise ValueError("no terminal to ask on; pass --yes if you mean it")
+                if not day.confirm("Run it?"):
+                    print("nothing run, nothing saved")
+                    return 1
+            learned = briefs.accept(args.accept, folder)
+            print(f"saved {learned.id}: the next time this failure comes back, `{learned.fix}` runs by itself")
+            _offer_share()
+            return 0
         if command == "learn":
+            if not (args.match and args.how and args.fix):
+                raise ValueError("learn needs --match, --how and --command (or --accept ID)")
             folder = args.brief or briefs.newest()
             if folder is None:
                 raise ValueError("no brief waiting; name one with --brief")
@@ -274,6 +298,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"arch-update: scan-sessions was not run: {waits}", file=sys.stderr)
                 return exits.SKIPPED  # held, not failed: the same status the timer uses for "not now"
             result = write_session_report(args.output_dir)
+            census_cases_now = census_cases(STATE_ROOT)  # the fixes found in the transcripts are kept as witnessed cases
+            found = witness.from_sessions(result["report"], census_cases_now, STATE_ROOT)
+            if found:
+                print(f"kept {len(found)} fix{'es' if len(found) > 1 else ''} seen in assistant sessions as witnessed (arch-update census)", file=sys.stderr)
             if args.json:
                 _json(result["report"])
             else:

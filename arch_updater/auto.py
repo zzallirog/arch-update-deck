@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import aur_handoff, briefs, census, discover, dotfiles, exits, pacnew, power, repairs, restarts, share_report, stores, tis, watch, witness
+from . import aur_handoff, briefs, census, discover, dotfiles, exits, pacnew, power, repairs, restarts, share_report, stores, tis, transcripts, watch, witness
 from .cve import scan_cves
 from .engine import STATE_ROOT, CommandResult, _write_json, load_json
 from .exits import Stopped
@@ -663,6 +663,12 @@ def run_auto(
                 witnessed = [case.id for case in witness.settle(STATE_ROOT, world.cases, set(world.done), datetime.fromisoformat(started))]
             except Exception:  # noqa: BLE001 - a log that cannot be read is no reason to lose the week's report
                 witnessed = []
+        sessions: dict[str, Any] = {"ran": False}
+        if not dry_run and not crash and not world.interrupted:
+            try:  # the weekly scan of assistants' transcripts: fixes found there become witnessed cases (heavy: not on a battery)
+                sessions = transcripts.refresh(STATE_ROOT, world.cases)
+            except Exception as exc:  # noqa: BLE001 - a scan that broke must not lose the report
+                sessions = {"ran": False, "error": f"{type(exc).__name__}: {exc}"}
         try:
             written = world.write_briefs()
         except OSError:  # a brief that cannot be written must not lose the report
@@ -699,6 +705,7 @@ def run_auto(
             "offers": offers,
             "learned_unshared": learned_unshared,
             "witnessed": witnessed,  # fixes seen in pacman.log this run (new witnessed cases)
+            "sessions": sessions,  # the weekly scan of transcripts: ran or not (held on a battery, or done within a week)
             "self_fixed": proved,
             "repairs": world.repairs,
             "pacnew": world.pacnew,

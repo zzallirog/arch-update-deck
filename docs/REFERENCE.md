@@ -230,7 +230,7 @@ is caught only by Update Day.
 | `share-report` | Prints a sanitised summary of the last patrol as JSON (schema `arch-update-share/v1`: health, reboot need, pending counts, CVE count, the names of the issue kinds). It writes nothing and sends nothing. Without a patrol report it exits 1 with `run arch-update patrol first`. |
 | `dotfiles [--only PATH] [--suggest] [--add PATH [--install CMD] [--check CMD]]` | Without a flag: brings the repositories under `dotfiles` to their newest release now, whatever their 30 days; exit 1 if one is left broken (with a brief). `--suggest` and `--add`: see [Dotfiles](#dotfiles). |
 | `brief [FOLDER]` | Prints the newest brief with no fix saved, or the one in `FOLDER`. See [Failures that teach](#failures-that-teach). |
-| `learn [--brief FOLDER] --match RE --how TEXT --command CMD` | Runs the fix, checks that it settles the failure, and saves it as a census case; refused (exit 1, nothing saved) otherwise. See [Failures that teach](#failures-that-teach). |
+| `learn [--brief FOLDER] (--match RE --how TEXT --command CMD \| --accept ID [--yes])` | Runs the fix, checks that it settles the failure, and saves it as a census case; refused (exit 1, nothing saved) otherwise. See [Failures that teach](#failures-that-teach). |
 | `census [--share [--json]]` | Lists the cases this machine recorded or learned: `[ ]` only here, `[x]` already handed upstream, and the count of `*` official ones (shipped with the tool, `"origin": "official"` in the catalogue). `--share` opens one GitHub issue with every case not yet handed upstream filled in (home folder written `~`, login `<user>`, each `"origin": "local"`) and marks them `[x]`; you press Submit, or close the tab. Nothing is chosen case by case, and nothing is sent by the tool itself. Without a desktop it prints the link; `--json` prints every local case as JSON. Sharing is optional and apart from the update. Each learned fix is offered twice at most: at the `learn` prompt, and once more in the notice of the first run in which that fix repaired a failure by itself and the run ended well. An offer counts as made only where a person is shown it: a `learn` outside a terminal (an assistant or a script ran it) prints one line naming `census --share` and leaves the offer for the next notice, and a run with no `notify-send` leaves it for the next one that has it. A click on the notice runs `census --share` when no problem has a `fix` of its own and the AUR was not held. `"share": false` turns the offer off, and a fix already handed upstream is never offered. |
 | `vault [--classify TEXT]` | Prints the shipped catalogue of known failures as JSON, or only the entries whose pattern matches `TEXT`. |
 | `cve` | Prints the `arch-audit` findings as JSON (`available`, `findings`, `count`, `error`). Exit 0 even when `arch-audit` is missing. |
@@ -302,6 +302,16 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
 - Recognition asks every kind of knowledge and answers in a fixed order: a learned case, then a
   witnessed one, then the tool's own refusal, then the shipped catalogue (the case without a repair
   first). A witnessed or learned case answers only the store it was made for.
+- `arch-update learn --accept ID` takes a witnessed fix (see `arch-update census`) and makes it a
+  replay. The fix is made exact for a failure in an open brief that it matches (or the one it was seen
+  for), the person is asked first (`--yes` skips the question; without a terminal and without `--yes`
+  nothing runs), the command runs with `--noconfirm`, the failed step is redone, and the case is kept
+  as `LOCAL-LEARNED-<hash>` only if that step then passes. The witnessed case is gone afterwards.
+- The weekly run also scans the AI transcripts once a week (`arch-update scan-sessions` does it by hand):
+  a package action that failed in a session and the proven action that follows it and names a package
+  the failure names become a witnessed case, the same way. It is heavy work: on a battery or under the
+  `power-saver` profile it waits (`sessions.held` in the report says why). The report has a `sessions`
+  entry for it.
 
 ### Changed in 0.20.06
 

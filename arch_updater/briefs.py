@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import census, power
+from . import census, power, witness
 from .textsafe import secrets
 from .engine import STATE_ROOT
 
@@ -232,6 +232,40 @@ def learn(
     meta["learned"] = case.id
     (folder / "meta.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     return case
+
+
+def witnessed_for(case_id: str, state_root: Path | None = None) -> tuple[census.Case, Path | None]:
+    """The witnessed case, and the brief to prove it on: a failure it matches that has no fix yet, else the one it was seen for."""
+    case = next((item for item in census.load(state_root or STATE_ROOT) if item.id == case_id and item.witnessed), None)
+    if case is None:
+        raise ValueError(f"{case_id} is not a witnessed fix on this machine (arch-update census lists them)")
+    folders = sorted(root(state_root).glob("*/meta.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    metas = [(path.parent, json.loads(path.read_text(encoding="utf-8"))) for path in folders]
+    for folder, meta in metas:
+        if not meta.get("learned") and meta.get("store") == case.store and case.matches((folder / "failure.log").read_text(encoding="utf-8")):
+            return case, folder
+    return case, next((folder for folder, meta in metas if meta.get("witnessed") == case.id), None)
+
+
+def accept(case_id: str, folder: Path | None = None, state_root: Path | None = None, run: Any = None, followed: set[str] | None = None) -> census.Case:
+    """Turn a witnessed fix into a case the run replays: made exact for the failure in a brief, run, the step redone.
+
+    `learn` does the proving, so nothing is kept unless the command ran and the failed step then passed. The
+    command gets the person's yes built in (`--noconfirm`): a replay has nobody to answer. The witnessed case is gone
+    afterwards, and the learned one takes its place.
+    """
+    state_root = state_root or STATE_ROOT
+    case, found = witnessed_for(case_id, state_root)
+    folder = folder or found
+    if folder is None:
+        raise ValueError("no brief holds a failure this fix answers; name one with --brief")
+    exact = witness.instantiate(case, (folder / "failure.log").read_text(encoding="utf-8"))
+    if exact is None:
+        raise ValueError(f"the failure in {folder / 'failure.log'} is not one this fix answers")
+    match, fix = exact
+    learned = learn(folder, match, f"seen done by hand ({case.source or 'on this machine'}), checked on this failure", witness.unattended(fix), state_root, run, followed)
+    census.save_local([item for item in census.load(state_root) if item.id != case.id], state_root)
+    return learned
 
 
 def _reproduce_merge(where: str, rollback: str, target: str, match: str, command: str) -> bool:

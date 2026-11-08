@@ -272,15 +272,16 @@ def build(store: str, failure: str, output: str, runs: list[tuple[Pacman, list[s
     assert first is not None
     fixes = [fix_of(command.argv) for command, _ in related]
     generic = [fix_of(command.argv, first.groups) for command, _ in related]
-    fix, template = " && ".join(fixes), " && ".join(generic)
+    safe = lambda text: textsafe.clean(textsafe.secrets(text))  # noqa: E731 - a transcript is not trusted: no escape sequence reaches a terminal
+    fix, template = safe(" && ".join(fixes)), safe(" && ".join(generic))
     ident = census.WITNESSED + hashlib.sha256(f"{store}\0{first.match}\0{template}".encode()).hexdigest()[:8]
-    evidence = "\n".join(textsafe.secrets(line) for _, lines in related for line in lines)
+    evidence = "\n".join(safe(line) for _, lines in related for line in lines)
     return census.Case(
         id=ident,
         match=first.match,
-        fix=textsafe.secrets(fix),
-        generic=textsafe.secrets(template) if template != fix else "",
-        meaning=f"{store}: after {failure} somebody ran `{textsafe.secrets(fix)}` and the next update passed (seen {day} in {source}); shown, never run for you",
+        fix=fix,
+        generic=template if template != fix else "",
+        meaning=f"{store}: after {failure} somebody ran `{fix}` and the next update passed (seen {day} in {source}); shown, never run for you",
         store=store,
         evidence=evidence,
         source=source,

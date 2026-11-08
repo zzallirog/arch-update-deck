@@ -442,8 +442,10 @@ def scan_claude(path: Path, changes: list[datetime]) -> list[Action]:
     return actions
 
 
-def scan_all(codex_root: Path = CODEX_ROOT, claude_root: Path = CLAUDE_ROOT) -> dict[str, Any]:
-    changes = pacman_change_times()
+def scan_all(codex_root: Path | None = None, claude_root: Path | None = None, log: Path | None = None) -> dict[str, Any]:
+    codex_root = CODEX_ROOT if codex_root is None else codex_root  # read when called: a test moves them
+    claude_root = CLAUDE_ROOT if claude_root is None else claude_root
+    changes = pacman_change_times(PACMAN_LOG if log is None else log)
     actions: list[Action] = []
     codex_paths = list(sorted(codex_root.rglob("*.jsonl"))) if codex_root.exists() else []
     for path in codex_paths:
@@ -523,8 +525,8 @@ def build_failure_evidence(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_session_report(output_dir: Path) -> dict[str, Any]:
-    report = scan_all()
+def write_session_report(output_dir: Path, codex_root: Path | None = None, claude_root: Path | None = None, log: Path | None = None) -> dict[str, Any]:
+    report = scan_all(codex_root, claude_root, log)
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "update-sessions.json"
     markdown_path = output_dir / "UPDATE-SESSIONS.md"
@@ -583,3 +585,40 @@ def render_markdown(report: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+# ── the weekly refresh: the actor that makes the scan feed the census ────────────────────────────────────────────
+
+SCAN_FILE = "update-sessions.json"
+SCAN_EVERY = timedelta(days=7)
+
+
+def due(report: Path, now: datetime | None = None) -> bool:
+    """True when the last scan is a week old or there is none. A report that cannot be read is no scan."""
+    now = now or datetime.now().astimezone()
+    try:
+        made = _parse_time(json.loads(report.read_text(encoding="utf-8")).get("generated_at"))
+    except (OSError, ValueError, AttributeError):
+        return True
+    return made is None or now - made >= SCAN_EVERY
+
+
+def refresh(
+    state_root: Path, cases: list[Any], now: datetime | None = None, force: bool = False,
+    codex_root: Path | None = None, claude_root: Path | None = None, log: Path | None = None,
+) -> dict[str, Any]:
+    """Once a week, from the weekly run: scan the transcripts again and keep the fixes found in them as witnessed cases.
+
+    It reads every transcript on the disk, so it is heavy work: on a battery or under the power-saver profile it waits
+    (`held` says why) and the next run on mains does it. Returns what happened, for the run's report.
+    """
+    from . import power, witness
+
+    if (held := power.heavy_hold()) is not None:
+        return {"ran": False, "held": held}
+    folder = state_root / "reports"
+    if not force and not due(folder / SCAN_FILE, now):
+        return {"ran": False, "fresh": True}
+    result = write_session_report(folder, codex_root, claude_root, log)
+    found = witness.from_sessions(result["report"], cases, state_root)
+    return {"ran": True, "witnessed": [case.id for case in found], "proven_sessions": result["report"]["counts"]["sessions_with_proven_changes"]}
