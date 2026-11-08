@@ -46,6 +46,11 @@ Environment=PATH=%h/.local/bin:%h/bin:/usr/local/sbin:/usr/local/bin:/usr/bin
 ExecCondition={launcher} auto --due
 ExecStart={launcher} auto --scheduled
 SuccessExitStatus=10 80
+# A background job on a machine that may run on its battery: the lowest priority, idle I/O and half a core at most.
+# The run sets its own ceiling on top of this (quiet.py); this is what holds before it has.
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=50%
 # On stop only the run itself is signalled; it lets the package manager finish.
 KillMode=mixed
 TimeoutStopSec=150min

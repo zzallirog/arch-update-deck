@@ -805,3 +805,41 @@ def test_arch_update_auto_by_hand_on_a_battery_asks_and_a_no_runs_nothing(box, l
     monkeypatch.setattr("sys.stdin", Typed("y\n"))
     cli.main(["auto"])
     assert len(ran) == 1
+
+
+# ── P6: a background job on a laptop ───────────────────────────────────────
+
+def test_the_weekly_service_unit_is_lowest_priority_idle_io_and_at_most_half_a_core(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from arch_updater import scheduler
+
+    monkeypatch.setattr(scheduler, "run_capture", lambda argv, **kw: SimpleNamespace(returncode=0, output=""))
+    monkeypatch.setattr(scheduler.shutil, "which", lambda tool: "/opt/deck/bin/arch-update")
+    scheduler.install_weekly_auto_timer(unit_dir=tmp_path)
+    text = (tmp_path / "arch-update-auto.service").read_text()
+    service = text.split("[Service]")[1]
+    settings = dict(line.split("=", 1) for line in service.splitlines() if "=" in line and not line.startswith("#"))
+    assert settings["Nice"] == "19" and settings["IOSchedulingClass"] == "idle"
+    assert int(settings["CPUQuota"].rstrip("%")) <= 50
+
+
+def test_on_a_battery_the_run_takes_at_most_half_a_core_and_nice_19(tmp_path, monkeypatch) -> None:
+    from test_quiet import proc_with, sys_with
+
+    from arch_updater import quiet
+
+    root = sys_with(tmp_path, mains_online="0", smt_pairs=8)  # 8 cores: a quarter is 2, 60 % each, 120 % without a battery
+    (root / "devices/system/cpu/online").write_text("0-15\n")
+    (root / "class" / "power_supply" / "BAT0" / "status").write_text("Discharging\n")
+    (root / "class" / "power_supply" / "BAT0" / "capacity").write_text("80\n")
+    niced, calls = [], []
+    monkeypatch.setattr(quiet.os, "nice", niced.append)
+    unit = proc_with(tmp_path, cgroup="/user.slice/arch-update-auto.service")
+    done = quiet.calm({}, lambda argv: calls.append(argv) or 0, unit, root)
+    assert "CPUQuota=50%" in calls[1] and niced == [19] and "nice 19" in done
+    (root / "class" / "power_supply" / "ACAD" / "online").write_text("1\n")
+    (root / "class" / "power_supply" / "BAT0" / "status").write_text("Charging\n")
+    calls.clear()
+    quiet.calm({}, lambda argv: calls.append(argv) or 0, unit, root)
+    assert "CPUQuota=120%" in calls[1]

@@ -35,6 +35,8 @@ PROC = Path("/proc")
 GAMES = re.compile(r"^(gamescope|gamescope-wl|wine64-preloader|wineserver)$|^steam_app_\d+$")
 PRESSURE = {"cpu": 40.0, "memory": 10.0, "io": 30.0}  # "some avg60" above this: the machine is busy already
 SHARE = 4  # a quarter of the physical cores, at least one
+BATTERY_QUOTA = 50  # % of one CPU, at most, while the machine runs on its battery
+NICE = 19  # the run, and so a build it starts, takes only what nothing else wants
 QUOTA_PER_CORE = 60  # % of one CPU for each core given: below a full core, so the cores never sit at the top clock
 MAX_WAIT_DAYS = 3
 WAITING = "quiet-waiting.json"  # in the state directory: since when the run has been waiting
@@ -194,13 +196,18 @@ def calm(config: dict[str, Any] | None, run: Any = None, proc: Path | None = Non
     done = []
     try:
         picked = cores(sys_root=sys_root, share=(config or {}).get("quiet_share", SHARE))
-        properties = [f"AllowedCPUs={','.join(map(str, picked))}", f"CPUQuota={QUOTA_PER_CORE * len(picked)}%", "CPUWeight=20", "IOWeight=20"]
+        quota = QUOTA_PER_CORE * len(picked)
+        from . import power  # late: power imports this module
+
+        if power.on_battery(sys_root):
+            quota = min(quota, BATTERY_QUOTA)
+        properties = [f"AllowedCPUs={','.join(map(str, picked))}", f"CPUQuota={quota}%", "CPUWeight=20", "IOWeight=20"]
         if run(["systemctl", "--user", "set-property", "--runtime", unit, *properties]) == 0:
             done.append(f"{unit}: {' '.join(properties)}")
         if run(["ionice", "-c", "3", "-p", str(os.getpid())]) == 0:
             done.append("io idle")
-        os.nice(10)
-        done.append("nice 10")
+        os.nice(NICE)
+        done.append(f"nice {NICE}")
     except Exception:  # noqa: BLE001 - a ceiling that cannot be set must not stop the update
         pass
     return done
