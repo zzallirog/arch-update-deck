@@ -331,6 +331,17 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   goes in is a command for a human (`"automatic": false`, no `repair`, `"origin": "community"`). A community
   case that names the packages it was seen for (`generic`) comes before the general shipped case that also
   matches. Every pull request is read by a person before it is merged.
+- Census patterns are matched with limits: the tail (64 KB) of the output, line by line (a pattern never spans a
+  newline), each line cut at 4000 characters. A `LOCAL-` or `CENSUS-` pattern with a repeat inside a repeat, or
+  one that takes more than 50 ms of CPU on a 16 KB token, is not used; a match that still runs for 1 s counts as
+  no match. The holes the tool writes (`<path>`, `<url>`, `<pkg>`) are bounded and stay on one line.
+- A witnessed fix never takes the place of a shipped repair: when a shipped case with a `repair` also finds the
+  failure, the repair runs. A witnessed fix of several commands is pinned to the packages it was seen for, stops
+  at the first command that undoes or reinstalls what an earlier one changed, and is accepted as the same chain
+  (`--noconfirm` goes into each pacman command).
+- A shared census also loses IP addresses, e-mail addresses, `Authorization`/`Bearer` values, access tokens,
+  `password=`/`token=`/`psk=` values, Wi-Fi SSIDs and SSH fingerprints; the login is matched in any letter case.
+  A click on the notice for a witnessed or community (`CENSUS-`) fix opens `arch-update brief`, not the fix.
 
 ### Changed in 0.20.06
 
