@@ -602,7 +602,7 @@ def _root(sh: Shell, stdin: TextIO, out: TextIO) -> bool:
 def share_offer(config: dict[str, Any] | None) -> str:
     """The line under PENDING while the census holds fixes or failures nobody has handed upstream; never an error."""
     try:
-        return share_report.share_line(census.load(STATE_ROOT), STATE_ROOT, config)
+        return share_report.share_line(census.load(STATE_ROOT, persist=False), STATE_ROOT, config)
     except Exception:  # noqa: BLE001 - the offer is a courtesy: Update Day opens without it
         return ""
 

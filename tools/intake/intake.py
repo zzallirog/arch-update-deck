@@ -36,7 +36,10 @@ MAX_FIX = 400
 DESTRUCTIVE = re.compile(
     r"(?i)(\brm\s+(-\w*\s+)*(-\w*[rf]\w*)\b|\bmkfs\b|\bdd\s+if=|\bshred\b|\bwipefs\b|>\s*/dev/(sd|nvme|mmc)|\bchmod\s+-R\s+\d+\s+/\s|\bchown\s+-R\b.*\s/\s*$"
     r"|\bcurl\b[^|;&]*\|\s*(sudo\s+)?(ba|z)?sh\b|\bwget\b[^|;&]*\|\s*(sudo\s+)?(ba|z)?sh\b|:\(\)\s*\{|\bpacman\s+-\w*S\w*\s+.*--overwrite\s+['\"]?\*"
-    r"|\bsudoers\b|\bvisudo\b|\bpasswd\b|\bfdisk\b|\bparted\b|\bcryptsetup\b)"
+    r"|\bsudoers\b|\bvisudo\b|\bpasswd\b|\bfdisk\b|\bparted\b|\bcryptsetup\b"
+    r"|\b(python3?|perl|ruby|node|php|lua)\s+-[ce]\b|\|\s*(sudo\s+)?(python3?|perl|ruby|node)\b|\beval\b|\bbase64\s+(-d|--decode)|\bxxd\s+-r"
+    r"|\btee\s+(-\w+\s+)*/(etc|boot|usr)\b|>>?\s*/(etc|boot|usr)\b|\bpacman\s+(?:\S+\s+)*?-[A-Za-z]*dd\b|\bsystemctl\s+(mask|disable)\b"
+    r"|\bgit\s+(clean|reset\s+--hard)\b|\bchmod\s+[0-7]*7[0-7]*\s|\bsetfacl\b|\bmount\b|\bumount\b|\bmv\s+\S+\s+/(etc|boot|usr)\b|\bln\s+-\w*f)"
 )
 # A pattern that finds a failure must not find these: lines of an update that went well.
 HARMLESS = ("", "ok", "done", ":: Synchronizing package databases...", "there is nothing to do", "resolving dependencies...", "error", "warning", "installing foo (1-1)")

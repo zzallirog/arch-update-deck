@@ -178,6 +178,22 @@ def search(pattern: str, text: str) -> re.Match[str] | None:
     return None
 
 
+def finditer(pattern: str, text: str) -> list[re.Match[str]]:
+    """Every line's first match of `pattern` (same limits as `search`): the lines of the log it finds a failure in."""
+    if not pattern or not usable(pattern):
+        return []
+    compiled = re.compile(pattern)
+    hits: list[re.Match[str]] = []
+    try:
+        for line in lines_of(text):
+            hit = _timed(lambda: compiled.search(line), MATCH_SECONDS)
+            if hit:
+                hits.append(hit)
+    except Overrun:
+        pass
+    return hits
+
+
 def found(pattern: str, text: str) -> bool:
     return search(pattern, text) is not None
 

@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
             _offer_share()
             return 0
         if command == "census":
-            cases = census_cases(STATE_ROOT)
+            cases = census.load(STATE_ROOT, persist=False)  # looking changes nothing
             if args.stats:
                 counts = census.stats(STATE_ROOT, cases)
                 if args.json:

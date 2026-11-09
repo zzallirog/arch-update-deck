@@ -529,6 +529,7 @@ def _trouble(world: World) -> list[dict[str, Any]]:
             "meaning": known[item.case].meaning if item.case in known else "",
             "fix": fix_for(item),
             **({"witnessed": True} if item.case in known and known[item.case].witnessed else {}),  # a fix somebody ran by hand: shown, never run
+            **({"community": True} if item.case.startswith("CENSUS-") else {}),  # a fix from strangers' census: shown, run only by a person
         }
         for item in items
     ]
@@ -539,7 +540,8 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
     if not sh.has("notify-send"):
         return
     body = report["crash"] or "; ".join(
-        f"{item['probe']}: {cause(item['detail'])} → {item['fix']}" + (" (done by hand once on this machine; not run for you)" if item.get("witnessed") else "")
+        f"{item['probe']}: {cause(item['detail'])} → {item['fix']}"
+        + (" (done by hand once on this machine; not run for you)" if item.get("witnessed") else " (from the shared census; read it before you run it)" if item.get("community") else "")
         for item in report["trouble"]
     )
     body = body or f"updated: {report['updated'] or 'nothing'}"
@@ -558,10 +560,16 @@ def announce(sh: Shell, report: dict[str, Any]) -> None:
     sell = ""
     if report.get("learned_unshared"):  # kept whole: the 400-character cut takes from the rest
         count = report["learned_unshared"]
-        sell = f" · your updater learned to fix {count} thing{'s' if count > 1 else ''} on its own. Click to pass {'them' if count > 1 else 'it'} on, so other people's updates fix themselves too"
+        saw = min(count, report.get("witnessed_unshared") or 0)  # fixes it only saw done by hand are not ones it learned to do
+        what = []
+        if count > saw:
+            what.append(f"learned to fix {count - saw} thing{'s' if count - saw > 1 else ''} on its own")
+        if saw:
+            what.append(f"saw {saw} fix{'es' if saw > 1 else ''} done by hand (it does not run {'them' if saw > 1 else 'it'})")
+        sell = f" · your updater {' and '.join(what)}. Click to pass {'them' if count > 1 else 'it'} on, so other people's updates fix themselves too"
     notice = ["notify-send", f"--urgency={urgency}", f"arch-update auto: {report['state']}", body[: 400 - len(sell)] + sell]
     # A click opens a terminal that runs this command: for a fix somebody ran by hand once, that is the brief that shows it.
-    fix = next((witness.SHOW if item.get("witnessed") else item["fix"] for item in report["trouble"] if item["fix"]), AUR_BY_HAND if "aur" in report["held"] else "")
+    fix = next((witness.SHOW if item.get("witnessed") or item.get("community") else item["fix"] for item in report["trouble"] if item["fix"]), AUR_BY_HAND if "aur" in report["held"] else "")
     fix = fix or ("arch-update census --share" if report.get("learned_unshared") else "")
     terminal = sh.terminal()
     if not (fix and terminal and sh.has("systemd-run")):
@@ -680,11 +688,13 @@ def run_auto(
         # What this run fixed by itself with a command learned here; it counts only when the run ended well.
         proved = sorted({item["case"] for item in world.repairs if item["repair"] == "replay" and item["attempted"]} | set(world.replayed))
         proved = proved if out > 0 and not crash else []
-        learned_unshared = 0
+        learned_unshared = witnessed_unshared = 0
         if not dry_run:  # fixes learned here that nobody upstream has: named in the notice, a click shares them
             # Remembered as offered only when there is a notice to carry the offer; otherwise it stays owed.
             offer = share_report.should_offer if sh.has("notify-send") else share_report.pending_offers
-            learned_unshared = len(offer(world.cases, STATE_ROOT, world.config, proved))
+            offered = offer(world.cases, STATE_ROOT, world.config, proved)
+            learned_unshared = len(offered)
+            witnessed_unshared = sum(case.witnessed for case in offered)
         code = 128 + world.signum if world.interrupted else exits.TOOL_FAILURE if crash else exit_code(out, world)
         report = {
             "run_id": run_id,
@@ -704,6 +714,7 @@ def run_auto(
             "held": world.held,
             "offers": offers,
             "learned_unshared": learned_unshared,
+            "witnessed_unshared": witnessed_unshared,  # of those, the ones only seen done by hand
             "witnessed": witnessed,  # fixes seen in pacman.log this run (new witnessed cases)
             "sessions": sessions,  # the weekly scan of transcripts: ran or not (held on a battery, or done within a week)
             "self_fixed": proved,

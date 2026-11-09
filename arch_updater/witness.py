@@ -30,6 +30,9 @@ from typing import Any
 from . import census, textsafe
 
 PACMAN_LOG = Path("/var/log/pacman.log")
+TRUSTED_DIRS = {"/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin"}
+MAX_TARGETS = 200  # a command with more is a system change, not the fix for one failure; and a log of them must not stall a run
+MAX_COMMANDS = 200
 MAX_AGE_DAYS = 60  # a brief older than this is not looked into: too much happened since
 GROUP_BARE = r"[A-Za-z0-9@_+][A-Za-z0-9@._+-]{0,63}"  # bounded: a package name is short, and a pattern must stay linear
 GROUP_NAMED = r"[A-Za-z0-9@_+][A-Za-z0-9@._+-]{0,63}?"  # followed by -version-release
@@ -80,8 +83,8 @@ def when(text: str) -> datetime | None:
 
 def read_pacman(argv: list[str]) -> Pacman | None:
     """What a pacman command line changes, or None when it changes nothing worth a fix (a query, a refresh, -D, -F)."""
-    if not argv or Path(argv[0]).name != "pacman":
-        return None
+    if not argv or Path(argv[0]).name != "pacman" or ("/" in argv[0] and str(Path(argv[0]).parent) not in TRUSTED_DIRS):
+        return None  # the real pacman only: a program of the same name in some other folder is not what was meant
     ops, targets, named, skip, rest = "", [], [], False, False
     flags = ""
     for index, arg in enumerate(argv[1:], 1):
@@ -119,6 +122,8 @@ def read_pacman(argv: list[str]) -> Pacman | None:
         else:
             names.append(target.split("/", 1)[-1])
     names = [name for name in names if census.NAME.fullmatch(name)]
+    if len(names) > MAX_TARGETS:
+        return None
     if "S" in ops and not names:
         return None  # -Sy, -Syu: a refresh or a full upgrade, which is the update itself and not a fix for it
     return Pacman(ops, names, [name for name in named if census.NAME.fullmatch(name)], argv)
@@ -145,7 +150,7 @@ def hand_commands(text: str, since: datetime, until: datetime) -> list[Hand]:
                 current.completed = True
             if len(current.lines) < 8 and re.search(r"\[ALPM\] (transaction|removed|installed|upgraded|downgraded)", line):
                 current.lines.append(line)
-    return [hand for hand in found if hand.completed]
+    return [hand for hand in found if hand.completed][-MAX_COMMANDS:]
 
 
 # ── generalizing: a package name in the failure and in the command becomes a group ────────────────────────────────
@@ -214,16 +219,15 @@ def generalize(output: str, names: list[str]) -> Generalized | None:
         out += re.escape(tok.trail)
     if literal < 2:
         return None
-    found = census.search(out, output)
-    if found is None or any(found.group(group) != name for name, group in groups.items()):
-        return None
+    if not any(all(hit.groupdict().get(group) == name for name, group in groups.items()) for hit in census.finditer(out, output)):
+        return None  # no line of the output gives these very names back
     return Generalized(out, groups, clause)
 
 
 def fix_of(argv: list[str], groups: dict[str, str] | None = None) -> str:
     """The command as a person would type it: `sudo`, no `--noconfirm`, no yay `--config`. With groups, `{pkg}` for names."""
     kept, skip = [], False
-    for arg in argv:
+    for arg in ["pacman", *argv[1:]]:  # the program is the word pacman, whatever path the log or the transcript gave
         if skip:
             skip = False
         elif arg == "--config":
@@ -238,14 +242,31 @@ def fix_of(argv: list[str], groups: dict[str, str] | None = None) -> str:
 
 
 def unattended(fix: str) -> str:
-    """The same command with the person's yes built in: what a replay needs, since nobody is there to answer."""
-    words = shlex.split(fix)
+    """The same fix with the person's yes built in: what a replay needs, since nobody is there to answer.
+
+    A fix is one command or several joined by `&&` (what the person typed, in order). Every pacman command in it gets
+    `--noconfirm`; the joints stay what they were, and every word is quoted again as it was.
+    """
+    lexer = shlex.shlex(fix, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    commands: list[list[str]] = [[]]
+    for word in lexer:
+        if word == "&&":
+            commands.append([])
+        elif word and set(word) <= set("();<>|&"):
+            return fix  # anything but a plain chain is left exactly as it is
+        else:
+            commands[-1].append(word)
+    return " && ".join(" ".join(shlex.quote(word) for word in _with_yes(words)) for words in commands if words)
+
+
+def _with_yes(words: list[str]) -> list[str]:
     if "--noconfirm" in words or "pacman" not in words:
-        return fix
+        return words
     at = words.index("pacman") + 1
     while at < len(words) and words[at].startswith("-") and not words[at].startswith("--"):
         at += 1
-    return " ".join(shlex.quote(word) for word in [*words[:at], "--noconfirm", *words[at:]])
+    return [*words[:at], "--noconfirm", *words[at:]]
 
 
 def instantiate(case: census.Case, output: str) -> tuple[str, str] | None:
@@ -265,22 +286,51 @@ def instantiate(case: census.Case, output: str) -> tuple[str, str] | None:
 # ── building the case ─────────────────────────────────────────────────────────────────────────────────────────────
 
 
+def pin(pattern: str, groups: dict[str, str]) -> str:
+    """The pattern with each capture group replaced by the package name it captured (`groups`: name -> group)."""
+    for name, group in groups.items():
+        pattern = pattern.replace(f"(?P<{group}>{GROUP_BARE})", re.escape(name)).replace(f"(?P<{group}>{GROUP_NAMED})", re.escape(name))
+        pattern = pattern.replace(f"(?P={group})", re.escape(name))
+    return pattern
+
+
+def until_undone(runs: list[tuple[Pacman, list[str]]]) -> list[tuple[Pacman, list[str]]]:
+    """The commands up to the first one that undoes an earlier one: a removal is not followed by a reinstall of what it
+    removed, nor an install by the removal of what it installed. What comes after that is somebody changing their mind
+    (or the next week), not the fix, so it is left out together with the command that reverses."""
+    gone: set[str] = set()
+    added: set[str] = set()
+    kept: list[tuple[Pacman, list[str]]] = []
+    for command, lines in runs:
+        names = set(command.targets)
+        if ("R" in command.ops and names & added) or (command.ops in ("S", "U") and names & gone):
+            break
+        (gone if "R" in command.ops else added).update(names)
+        kept.append((command, lines))
+    return kept
+
+
 def build(store: str, failure: str, output: str, runs: list[tuple[Pacman, list[str]]], source: str, day: str) -> census.Case | None:
     """The witnessed case for a failure and the commands that followed it, or None when none of them is about it."""
-    related = [(command, lines) for command, lines in runs if generalize(output, command.targets + command.named)]
+    related = until_undone([(command, lines) for command, lines in runs if generalize(output, command.targets + command.named)])
     if not related:
         return None
     first = generalize(output, related[0][0].targets + related[0][0].named)
     assert first is not None
     fixes = [fix_of(command.argv) for command, _ in related]
     generic = [fix_of(command.argv, first.groups) for command, _ in related]
+    match = first.match
+    if len(related) > 1:
+        # Several commands name several packages: the one pattern cannot carry them all, so the case is pinned to these
+        # packages (it recognises the same failure again) and its fix is not a template.
+        match, generic = pin(first.match, first.groups), fixes
     safe = lambda text: textsafe.clean(textsafe.secrets(text))  # noqa: E731 - a transcript is not trusted: no escape sequence reaches a terminal
     fix, template = safe(" && ".join(fixes)), safe(" && ".join(generic))
-    ident = census.WITNESSED + hashlib.sha256(f"{store}\0{first.match}\0{template}".encode()).hexdigest()[:8]
+    ident = census.WITNESSED + hashlib.sha256(f"{store}\0{match}\0{template}".encode()).hexdigest()[:8]
     evidence = "\n".join(safe(line) for _, lines in related for line in lines)
     return census.Case(
         id=ident,
-        match=first.match,
+        match=match,
         fix=fix,
         generic=template if template != fix else "",
         meaning=f"{store}: after {failure} somebody ran `{fix}` and the next update passed (seen {day} in {source}); shown, never run for you",
