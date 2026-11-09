@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.06. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.07. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
