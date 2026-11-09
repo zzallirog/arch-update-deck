@@ -168,3 +168,48 @@ def test_counting_a_junk_census_does_not_rewrite_it(tmp_path) -> None:
     (tmp_path / "census.json").write_text(junk)
     census.stats(tmp_path)
     assert (tmp_path / "census.json").read_text() == junk
+
+
+# ── builder pass 2: the rest of what is only one person's or one network's ──────────────────────
+
+MORE = {
+    "an IPv4 address": ("fetch from 192.168.1.23 and 10.0.0.5 failed", ["192.168.1.23", "10.0.0.5"]),
+    "an IPv6 address": ("no route to fe80::1c2d:3eff:fe4f:5a6b via 2001:db8::8a2e:370:7334 or ::1", ["fe80::1c2d", "2001:db8", "8a2e:370"]),
+    "an e-mail address": ("maintainer alice.smith@example.com wrote", ["alice.smith@example.com", "alice.smith"]),
+    "an Authorization header": ("Authorization: Bearer abcdef0123456789ZYXWV", ["abcdef0123456789ZYXWV"]),
+    "a bare Bearer token": ("curl -H 'Bearer qwertyuiop12345678' failed", ["qwertyuiop12345678"]),
+    "a GitHub token": ("git push with ghp_abcdefghijklmnopqrstuvwxyz0123456789 failed", ["ghp_abcdefghijklmnopqrstuvwxyz"]),
+    "a fine-grained GitHub token": ("github_pat_11ABCDEFG0abcdefghijklmnop_abcdefghijklmnop", ["github_pat_11ABCDEFG0"]),
+    "a JWT": ("session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV", ["eyJhbGci", "SflKxwRJSMeK"]),
+    "password=": ("login with password=hunter2horse and went on", ["hunter2horse"]),
+    "a quoted password": ("passwd: \"correct horse battery\" rejected", ["correct horse battery"]),
+    "token=": ("api_key=A1b2C3d4E5f6 and token: zzTopSecret99", ["A1b2C3d4E5f6", "zzTopSecret99"]),
+    "a Wi-Fi psk": ("wpa psk=MyW1f1Passphrase set", ["MyW1f1Passphrase"]),
+    "a Wi-Fi SSID": ("connected to SSID: MyHomeWifi and essid=\"Cafe Net 5G\"", ["MyHomeWifi", "Cafe Net 5G"]),
+    "an SSH key fingerprint": ("host key SHA256:abcdEFGHijklMNOPqrstUVWXyz0123456789ABCDEFG not trusted", ["abcdEFGHijklMNOP"]),
+    "the login in other letters": ("owner ALICE in /HOME/ALICE/x and Alice", ["ALICE", "/HOME", "Alice"]),
+}
+
+
+@pytest.mark.parametrize("kind", MORE)
+def test_other_private_data_is_taken_out_of_every_field_that_is_shared(kind) -> None:
+    text, secrets = MORE[kind]
+    case = Case(id="LOCAL-WITNESSED-1", match="x", meaning=text, fix="sudo true " + text, evidence=text, generic=text, source=text, store="repo", where=text)
+    shared = share_report.share_census([case], "/home/alice", "alice", "nas-box")
+    flat = json.dumps(shared)
+    for secret in secrets:
+        assert secret not in flat, f"{kind}: {secret}"
+    (item,) = shared["cases"]
+    assert all(key in item for key in ("meaning", "fix", "evidence", "generic", "source", "where")), "and the case is still there"
+
+
+def test_a_pattern_that_holds_an_address_does_not_carry_it_either() -> None:
+    case = Case(id="LOCAL-1", match=r"mail alice\.smith@example\.com about 192\.168\.1\.23", meaning="x")
+    (item,) = share_report.share_census([case], "", "")["cases"]
+    assert "alice" not in item["match"] and "192" not in item["match"] and "example" not in item["match"]
+
+
+def test_a_time_a_version_and_a_plain_word_are_not_mistaken_for_private_data() -> None:
+    plain = "at 12:34:56 package 2.22.1.20261021-1 token expired, password required, passwords differ, essidx"
+    (item,) = share_report.share_census([Case(id="LOCAL-1", meaning=plain)], "", "")["cases"]
+    assert item["meaning"] == plain

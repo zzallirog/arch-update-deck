@@ -18,6 +18,20 @@ SENT = "census-sent.json"  # in the state directory: the local cases already han
 OFFERED = "census-offered.json"  # in the state directory: the offers a person has already been shown
 PROVED = "#replayed"  # the second offer of a fix: after it fixed a failure by itself
 TEMPLATE = "census.yml"  # the issue form in .github/ISSUE_TEMPLATE: its field ids are the query keys below
+# Other things that belong to one person or one network. A candidate is cut out by a pattern; an address is only
+# taken out when the `ipaddress` module agrees it is one, so a time of day or a version stays.
+_IP = re.compile(r"(?<![\w:.])(?:\d{1,3}\\?\.){3}\d{1,3}(?![\w:])|(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:])")
+_EMAIL = re.compile(r"[\w.+\\-]{1,64}@[\w-]{1,63}(?:\\?\.[\w-]{1,63}){1,5}")  # a backslash may escape a dot: this is also read in patterns
+_TOKEN = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}"
+    r"|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,}|eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,})"
+)
+_AUTH = re.compile(r"(?i)\b(authorization|proxy-authorization)(\s*[=:]\s*)[^\r\n]+|\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=-]{8,}")
+_SECRET = re.compile(
+    r"(?i)\b(password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|psk)(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|\S+)"
+)
+_SSID = re.compile(r"(?i)\b(e?ssid)(\s*[=:]\s*|\s+)(\"[^\"]*\"|'[^']*'|[^\s,;]+)")
+_FINGERPRINT = re.compile(r"\b(SHA256|MD5):[A-Za-z0-9+/=:]{16,}")
 BSSID = re.compile(r"(?<![0-9A-Fa-f:-])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:-])")  # a Wi-Fi access point or any MAC
 
 
@@ -113,6 +127,16 @@ def mark(case: Any, state_root: Any, sent: set[str] | None = None) -> str:
     return "[x]" if case.id in (sent if sent is not None else _sent(state_root)) else "[ ]"
 
 
+def _address(text: str) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(text.replace("\\", ""))
+    except ValueError:
+        return False
+    return True
+
+
 def hostname() -> str:
     try:
         return socket.gethostname()
@@ -135,11 +159,18 @@ def share_census(cases: list[Any], home: str, user: str, host: str | None = None
         if not isinstance(value, str):
             return value
         text = secrets(clean(value))
-        text = text.replace(home, "~") if home else text
+        text = re.sub(re.escape(home), "~", text, flags=re.I) if home else text
+        text = _AUTH.sub(lambda m: f"{m[1]}{m[2]}<redacted>" if m[1] else f"{m[3]}{m[4]}<redacted>", text)
+        text = _TOKEN.sub("<token>", text)
+        text = _SECRET.sub(lambda m: f"{m[1]}{m[2]}<redacted>", text)
+        text = _SSID.sub(lambda m: f"{m[1]}{m[2]}<ssid>", text)
+        text = _FINGERPRINT.sub(lambda m: f"{m[1]}:<fingerprint>", text)
+        text = _EMAIL.sub("<email>", text)
         text = BSSID.sub("<bssid>", text)
+        text = _IP.sub(lambda m: "<ip>" if _address(m[0]) else m[0], text)
         for name in names:
             text = re.sub(rf"(?<![A-Za-z0-9_-]){re.escape(name)}(?![A-Za-z0-9_-])", "<host>", text, flags=re.I)
-        return re.sub(rf"\b{re.escape(user)}\b", "<user>", text) if user else text
+        return re.sub(rf"\b{re.escape(user)}\b", "<user>", text, flags=re.I) if user else text
 
     local = [case for case in cases if case.id.startswith("LOCAL-")]
     keep = ("id", "match", "meaning", "fix", "generic", "repair", "store", "where", "seen", "evidence", "source")
