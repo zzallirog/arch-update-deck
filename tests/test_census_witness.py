@@ -217,9 +217,27 @@ def test_a_witnessed_fix_answers_only_the_store_it_was_seen_for(tmp_path) -> Non
     assert census.recognise(cases, "a-1-1 and b-2-1 are in conflict", "aur").id == CONFLICT_ID
 
 
-def test_a_witnessed_fix_beats_a_shipped_one_even_when_the_shipped_one_repairs(tmp_path) -> None:
-    witnessed = census.Case(id="LOCAL-WITNESSED-11111111", match="404", fix="sudo pacman -Syyu", store="repo")
-    cases = [*census.load(tmp_path), witnessed]
-    output = "error: failed retrieving file 'x' : The requested URL returned error: 404"
-    assert census.recognise(census.load(tmp_path), output).id == "MIRROR-STALE-404"
-    assert census.recognise(cases, output).id == witnessed.id
+REPAIRED = [
+    ("MIRROR-STALE-404", "wait-for-mirror", "error: failed retrieving file 'x' : The requested URL returned error: 404", "404"),
+    ("ABI-MISMATCH", "rebuild-against-new-libraries", "qs: symbol lookup error: libfoo.so.3: undefined symbol bar", "symbol lookup"),
+    ("DKMS-PARTIAL-MODULE-FAILURE", "rebuild-dkms", "Error! Bad return status for module build on kernel: 6.7.5 (x86_64)", "Bad return"),
+    ("DNS-FAILED", "wait-for-dns", "curl: (6) Could not resolve host: geo.mirror.pkgbuild.com", "resolve host"),
+    ("PACMAN-LOCK", "wait-for-lock", "error: failed to synchronize: unable to lock database", "lock database"),
+    ("ROOT-SPACE-LOW", "trim-cache", "error: failed to commit transaction: no space left on device", "no space"),
+]
+
+
+@pytest.mark.parametrize(("shipped", "repair", "output", "word"), REPAIRED)
+def test_a_witnessed_fix_never_takes_the_place_of_a_shipped_repair(tmp_path, shipped, repair, output, word) -> None:
+    """After one hand fix of a failure that the tool repairs by itself, the next one is still repaired by the tool."""
+    witnessed = census.Case(id="LOCAL-WITNESSED-11111111", match=word, fix="sudo pacman -Syyu", store="repo")
+    shipped_cases = census.load(tmp_path)
+    cases = [*shipped_cases, witnessed]
+    assert census.recognise(shipped_cases, output).id == shipped
+    chosen = census.recognise(cases, output, "repo")
+    assert chosen.id == shipped and chosen.repair == repair
+
+
+def test_a_witnessed_fix_still_wins_over_a_shipped_case_that_has_no_repair(tmp_path) -> None:
+    witnessed = census.Case(id="LOCAL-WITNESSED-11111111", match="are in conflict", fix="sudo pacman -R bar", store="repo")
+    assert census.recognise([*census.load(tmp_path), witnessed], SYNTHETIC).id == witnessed.id

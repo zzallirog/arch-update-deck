@@ -278,13 +278,17 @@ def recognise(cases: list[Case], output: str, store: str | None = None) -> Case 
     Every kind of knowledge is asked, and the order in which they answer is fixed:
 
     1. a case learned on this machine (`arch-update learn`): it was written for exactly this failure, after a fix that worked;
-    2. a case witnessed here: somebody fixed this by hand once, and the tool saw how;
+    2. a case witnessed here: somebody fixed this by hand once, and the tool saw how. It never takes the place of a
+       repair that already exists: when a shipped case with a `repair` also finds the failure (a stale mirror, a locked
+       database, a DKMS build, a changed library, a lost DNS), the witnessed one stays silent and the repair runs;
     3. the tool's own refusal: it stopped itself on purpose, which is not a build failure whatever else the output says;
     4. the shipped catalogue. When several cases match, one without a repair wins: a failure is only retried when
        every cause found in it is known to be repairable. Among those, a community case with a fix for the packages
        named in the failure (`generic`) comes first.
     """
     found = [case for case in cases if case.matches(output) and not (case.store and store is not None and case.store != store)]
+    if any(case.repair and not case.witnessed and not case.learned for case in found):
+        found = [case for case in found if not case.witnessed]  # a repair exists for this failure: a hand fix only adds a text to the brief
     for kind in (lambda case: case.learned, lambda case: case.witnessed, lambda case: case.id == TOOL_REFUSED):
         chosen = next((case for case in found if kind(case)), None)
         if chosen is not None:
