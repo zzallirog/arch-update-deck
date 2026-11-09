@@ -118,3 +118,11 @@ def test_the_catalogue_is_edited_at_its_end_and_nowhere_else() -> None:
     old = intake.CATALOGUE.read_text()
     result = intake.plan(json.loads(FIXTURE.read_text()))
     assert result["text"].startswith(old.rstrip()[: -len("\n  ]\n}")]) and result["text"].endswith("\n  ]\n}\n")
+
+
+def test_a_strangers_catastrophic_pattern_is_refused_and_does_not_hang_the_tool() -> None:
+    import time
+
+    started = time.process_time()
+    why = intake.refusal({"id": "LOCAL-LEARNED-1", "match": r"(\w+\s?)*;;EVIL", "fix": "sudo dkms autoinstall", "meaning": "m"}, [])
+    assert "slow or ambiguous" in why and time.process_time() - started < 2

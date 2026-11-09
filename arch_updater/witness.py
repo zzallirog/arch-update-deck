@@ -31,9 +31,9 @@ from . import census, textsafe
 
 PACMAN_LOG = Path("/var/log/pacman.log")
 MAX_AGE_DAYS = 60  # a brief older than this is not looked into: too much happened since
-GROUP_BARE = r"[A-Za-z0-9@_+][A-Za-z0-9@._+-]*"
-GROUP_NAMED = r"[A-Za-z0-9@_+][A-Za-z0-9@._+-]*?"  # followed by -version-release
-VERSION = r"\d[\w.+:~]*-\d+(?:\.\d+)?"
+GROUP_BARE = r"[A-Za-z0-9@_+][A-Za-z0-9@._+-]{0,63}"  # bounded: a package name is short, and a pattern must stay linear
+GROUP_NAMED = r"[A-Za-z0-9@_+][A-Za-z0-9@._+-]{0,63}?"  # followed by -version-release
+VERSION = r"\d[\w.+:~]{0,31}-\d{1,6}(?:\.\d{1,3})?"
 RUNNING = re.compile(r"^\[(?P<at>[^\]]+)\] \[PACMAN\] Running '(?P<cmd>.*)'\s*$")
 TELLING = re.compile(r"(?i)\b(error|fail(ed|ure)?|conflict|denied|not found|cannot|could not|unable|missing|refus|abort|warning)\b")
 OPTIONS_WITH_VALUE = {
@@ -191,9 +191,11 @@ def generalize(output: str, names: list[str]) -> Generalized | None:
     defined: set[str] = set()
     out, literal = "", 0
     toks = census.tokens(clause)
+    if toks and (toks[0].kind or any(_mentions(toks[0].core, name) for name in here)):
+        out = census.START  # the pattern opens with a hole or a group: tried at the start of a word only
     toks[-1].core = toks[-1].core.rstrip(".") or toks[-1].core  # the full stop that ends a sentence is not part of the failure
     for tok in toks:
-        out += (r"\s+" if out else "") + re.escape(tok.lead)
+        out += (r"[ \t]{1,8}" if out and out != census.START else "") + re.escape(tok.lead)
         owner = next((name for name in here if _mentions(tok.core, name)), None)
         if owner is not None:
             group = groups[owner]
@@ -212,7 +214,7 @@ def generalize(output: str, names: list[str]) -> Generalized | None:
         out += re.escape(tok.trail)
     if literal < 2:
         return None
-    found = re.search(out, output)
+    found = census.search(out, output)
     if found is None or any(found.group(group) != name for name, group in groups.items()):
         return None
     return Generalized(out, groups, clause)
@@ -248,7 +250,7 @@ def unattended(fix: str) -> str:
 
 def instantiate(case: census.Case, output: str) -> tuple[str, str] | None:
     """A witnessed case made exact for one failure: (a pattern that names its packages, the fix with them put in)."""
-    found = re.search(case.match, output) if case.match else None
+    found = census.search(case.match, output) if case.match else None
     if found is None:
         return None
     pattern = case.match

@@ -320,7 +320,7 @@ def _run(argv: list[str]) -> tuple[int, str]:
 
 
 def _finds(pattern: str, output: str) -> bool:
-    return bool(re.search(pattern, output))
+    return census.found(pattern, output)
 
 
 def show(folder: Path) -> str:

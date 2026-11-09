@@ -65,11 +65,9 @@ def refusal(case: dict[str, Any], known: list[census.Case]) -> str:
         return "a failure with no fix yet"
     if not match:
         return "no pattern"
-    try:
-        pattern = re.compile(match)
-    except re.error as exc:
-        return f"the pattern does not compile ({exc})"
-    if len(match) < 8 or any(pattern.search(text) for text in HARMLESS):
+    if not census.usable(match):  # a stranger's regex is never run before it has been checked: compile, nested repeats, a clock
+        return "the pattern does not compile, or it is slow or ambiguous (a repeat in a repeat)"
+    if len(match) < 8 or any(census.found(match, text) for text in HARMLESS):
         return "the pattern is too broad: it finds lines of a good update"
     if "\n" in fix or len(fix) > MAX_FIX or textsafe.clean(fix) != fix:
         return "the fix is not one plain line"

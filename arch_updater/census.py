@@ -20,10 +20,16 @@ Three kinds of case live in the state directory, and they do not weigh the same:
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
+import signal
+import threading
+import time
 from dataclasses import asdict, dataclass
+from re import _constants as sre_constants
+from re import _parser as sre_parser
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,6 +48,140 @@ SIGNATURE_CHARS = 160  # a signature is cut at a word below this many characters
 BRIEF_FIX = "arch-update brief"  # the fix of a failure nobody has an answer for yet
 
 
+# ── matching a pattern that a stranger or a past run wrote: linear, per line, with a clock ────────────────────────
+#
+# A census pattern is text from a failure log. It is matched against the output of an unattended run while the
+# shutdown lock is held, so its worst case must be bounded: the input is the tail of the output cut into lines
+# (a pattern never spans a newline), each line is cut short, a pattern with nested repeats or one that is slow on a
+# 16 KB token is not used at all, and a match that still runs long is stopped by a timer and counts as no match.
+
+MATCH_CHARS = 64 * 1024  # only the end of a log is looked at
+LINE_CHARS = 4000  # and only the start of each line
+TRIAL_SECONDS = 0.05  # a pattern slower than this on the adversarial token is refused
+MATCH_SECONDS = 1.0  # the most one search may take; past it the answer is "no match"
+NESTED_LIMIT = 2000  # repeats inside repeats: the product of their upper bounds
+_UNBOUNDED = sre_constants.MAXREPEAT
+_REPEATS = (sre_constants.MAX_REPEAT, sre_constants.MIN_REPEAT)
+_POSSESSIVE = getattr(sre_constants, "POSSESSIVE_REPEAT", None)
+
+
+class Overrun(Exception):
+    pass
+
+
+def lines_of(text: str) -> list[str]:
+    """The lines a pattern is tried on: the tail of `text`, each line cut at LINE_CHARS."""
+    return [line[:LINE_CHARS] for line in str(text)[-MATCH_CHARS:].splitlines()] or [""]  # no output is one empty line
+
+
+def _walk(items: Any, outer: int = 1) -> bool:
+    """False when a repeat holds another repeat and the two bounds together are more than NESTED_LIMIT (or unbounded)."""
+    for op, av in items:
+        if op in _REPEATS or op == _POSSESSIVE:
+            low, high, body = av
+            width = outer * (high if high != _UNBOUNDED else 10**9)
+            if high > 1 and _inside(body) and width > NESTED_LIMIT:
+                return False
+            if not _walk(body, width if high > 1 else outer):
+                return False
+        elif op == sre_constants.SUBPATTERN:
+            if not _walk(av[-1], outer):
+                return False
+        elif op == sre_constants.BRANCH:
+            if not all(_walk(branch, outer) for branch in av[1]):
+                return False
+        elif op in (sre_constants.ASSERT, sre_constants.ASSERT_NOT) and not _walk(av[1], outer):
+            return False
+    return True
+
+
+def _inside(items: Any) -> bool:
+    """True when `items` hold a repeat that may run more than once."""
+    for op, av in items:
+        if op in _REPEATS or op == _POSSESSIVE:
+            if av[1] > 1 or _inside(av[2]):
+                return True
+        elif op == sre_constants.SUBPATTERN and _inside(av[-1]):
+            return True
+        elif op == sre_constants.BRANCH and any(_inside(branch) for branch in av[1]):
+            return True
+    return False
+
+
+def _head(items: Any) -> str:
+    head = ""
+    for op, av in items:
+        if op != sre_constants.LITERAL:
+            break
+        head += chr(av)
+    return head
+
+
+def _timed(call: Any, seconds: float, cpu: bool = False) -> Any:
+    """`call()` with a timer that interrupts the matcher; Overrun when it runs past `seconds`. Without a main thread: no timer.
+
+    The run's own match is timed on the wall clock (the shutdown lock is held meanwhile); the trial of a pattern is
+    timed on this process's CPU, so that a busy machine does not make a good pattern look slow.
+    """
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
+        return call()
+
+    def stop(*_: Any) -> None:
+        raise Overrun
+
+    number, timer = (signal.SIGVTALRM, signal.ITIMER_VIRTUAL) if cpu else (signal.SIGALRM, signal.ITIMER_REAL)
+    before = signal.signal(number, stop)
+    signal.setitimer(timer, seconds)
+    try:
+        return call()
+    finally:
+        signal.setitimer(timer, 0)
+        signal.signal(number, before)
+
+
+@functools.lru_cache(maxsize=512)
+def usable(pattern: str) -> bool:
+    """True when a pattern compiles, has no repeat inside a repeat to speak of and is fast on a 16 KB token of any shape."""
+    try:
+        compiled = re.compile(pattern)
+        tree = sre_parser.parse(pattern)
+    except (re.error, RecursionError, OverflowError):
+        return False
+    if not _walk(tree):
+        return False
+    head = _head(tree)[:60]
+    for filler in ("a", "a-", "a-1", "/a", "a ", "1", "0x", "aB ", ".-"):
+        for end in ("", "!"):  # a match that fails at the very end is the slow one
+            line = (head + filler * (16384 // len(filler)))[: LINE_CHARS - 1] + end  # as long as a line may be, ending in a mismatch
+            started = time.process_time()
+            try:
+                _timed(lambda: compiled.search(line), TRIAL_SECONDS * 4, cpu=True)
+            except Overrun:
+                return False
+            if time.process_time() - started > TRIAL_SECONDS:
+                return False
+    return True
+
+
+def search(pattern: str, text: str) -> re.Match[str] | None:
+    """The first match of `pattern` in a line of the tail of `text`, or None. Never raises, never runs long."""
+    if not pattern or not usable(pattern):
+        return None
+    compiled = re.compile(pattern)
+    try:
+        for line in lines_of(text):
+            found = _timed(lambda: compiled.search(line), MATCH_SECONDS)
+            if found:
+                return found
+    except Overrun:
+        return None
+    return None
+
+
+def found(pattern: str, text: str) -> bool:
+    return search(pattern, text) is not None
+
+
 @dataclass
 class Case:
     id: str
@@ -58,20 +198,25 @@ class Case:
     source: str = ""  # a witnessed case: "pacman.log" or the transcript surface it came from
 
     def matches(self, output: str) -> bool:
-        return bool(self.classify_output and self.match and re.search(self.match, output))
+        return bool(self.classify_output and self.match and (found(self.match, output) if self.guarded else re.search(self.match, output)))
 
     def fix_for(self, output: str) -> str:
         """The command for this very failure: a generalized fix has the package names of `output` put in."""
         if not (self.generic and self.match and output):
             return self.fix
-        found = re.search(self.match, output)
-        if found is None:
+        hit = search(self.match, output)
+        if hit is None:
             return self.fix
         text = self.generic
-        for name, value in found.groupdict().items():
+        for name, value in hit.groupdict().items():
             if value and NAME.fullmatch(value):
                 text = text.replace("{" + name + "}", value)
         return text if "{" not in text else self.fix
+
+    @property
+    def guarded(self) -> bool:
+        """A pattern written by a run, a person or a stranger is matched with the limits above; the shipped ones are the maintainers'."""
+        return self.id.startswith(("LOCAL-", "CENSUS-"))
 
     @property
     def witnessed(self) -> bool:
@@ -159,7 +304,10 @@ def signature(output: str) -> str:
 # ── the signature of a line: what stays when this machine's own names are taken out ──────────────────────────────
 
 _PLACEHOLDER = {"<path>": "path", "<url>": "url", "<pkg>": "pkg", "<hash>": "hash"}
-_HOLE = {"path": r"\S+(?:\s+\S+)*?", "url": r"\S+", "pkg": r"\S+", "hash": r"[0-9a-fA-F]{7,64}"}
+# Every hole is bounded and stays on its line: a run of paths is at most eight words of at most 200 characters.
+_HOLE = {"path": r"\S{1,200}(?:[ \t]{1,4}\S{1,200}){0,7}", "url": r"\S{1,300}", "pkg": r"\S{1,100}", "hash": r"[0-9a-fA-F]{7,64}"}
+START = r"(?<!\S)"
+_HIDDEN_HOLE = r"[^/?#@&\s]{1,100}"
 _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S*")
 _PKGFILE = re.compile(r".*\.pkg\.tar(?:\.\w+)?")
 _PKGVER = re.compile(r"(?=\S*[A-Za-z])[A-Za-z0-9@._+][A-Za-z0-9@._+-]*-\d[\w.+:~]*-\d+(?:\.\d+)?")  # name-version-release
@@ -239,7 +387,9 @@ def pattern_of(shown: str) -> str:
     out = ""
     for index, part in enumerate(parts):
         out += _HOLE[_PLACEHOLDER[part]] if index % 2 else _VOLATILE.sub(lambda _: _NUMBER, re.escape(part))
-    return out.replace(re.escape(textsafe.HIDDEN), r"[^/?#@&\s]+")  # the hidden part still matches whatever stood there
+    if shown.startswith("<"):
+        out = START + out  # a pattern that opens with a hole is tried only at the start of a word, not at every character
+    return out.replace(re.escape(textsafe.HIDDEN), _HIDDEN_HOLE)  # the hidden part still matches whatever stood there
 
 
 def pattern_for(output: str) -> tuple[str, str]:
