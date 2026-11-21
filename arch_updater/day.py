@@ -31,7 +31,7 @@ from datetime import datetime
 from typing import Any, TextIO
 
 from . import atomic
-from . import auto, census, exits, home, power, quiet, restarts, share_report
+from . import auto, census, exits, home, power, quiet, restarts, share_report, space
 from .engine import STATE_ROOT, available_kernel_profiles, load_json, read_aur_queue, select_kernel
 from .keepalive import NOTICE as TICKET_EXPIRED, Keepalive
 from .scheduler import AUTO_UNIT
@@ -54,7 +54,8 @@ _QUEUE_LINE = re.compile(r"^(\S+)\s+(\S+)\s+->\s+(\S+)")
 _SNAP_LINE = re.compile(r"^(\S+)\s+(\S+)\s+\d+\s")  # name, version, revision
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 NEEDS_PASSWORD = ("NO-ROOT", "SUDO-TIMESTAMP-EXPIRED")  # what a person at the terminal settles by typing the password
-STORE_NAMES = {"repo": "repositories", "aur": "AUR", "flatpak": "flatpak", "snap": "snap"}
+STORE_NAMES = {"repo": "repositories", "aur": "AUR", "flatpak": "flatpak", "snap": "snap", "firmware": "firmware"}
+FIRMWARE_BY_HAND = "fwupdmgr update"  # a flash can brick a machine: the screen lists it, a person runs it
 HOLD_ENV = "ARCH_UPDATE_HOLD"  # set by the .desktop entry: its window closes with the program, so the screen waits for Enter
 ASK_WAIT_MINUTES = 30  # how long the question waits for an answer before the week is skipped
 ASK_RESULT = "ask-result.json"
@@ -139,6 +140,28 @@ def _snap(sh: Shell) -> list[Row] | None:
     return [Row(m[1], have.get(m[1], "?"), m[2], "snap") for m in map(_SNAP_LINE.match, waiting.output.splitlines()) if m]
 
 
+def _firmware(sh: Shell) -> list[Row] | None:
+    """Devices with a newer firmware release on LVFS, as fwupd lists them. Read only: nothing here is ever flashed.
+
+    `--no-metadata-check` keeps fwupdmgr from asking about stale metadata; the list is what the last refresh knows.
+    Exit 2 is fwupd's "nothing to do". Names and versions come from device firmware: Row cleans them.
+    """
+    waiting = sh.capture(["fwupdmgr", "get-updates", "--json", "--no-metadata-check"], timeout=60)
+    if waiting.returncode == 2:
+        return []
+    if waiting.returncode != 0:
+        return None
+    try:
+        devices = json.loads(waiting.output).get("Devices") or []
+        return [
+            Row(str(item.get("Name") or "device"), str(item.get("Version") or "?"), str(((item.get("Releases") or [{}])[0]).get("Version") or "?"), "firmware")
+            for item in devices
+            if isinstance(item, dict)
+        ]
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def queue(sh: Shell) -> tuple[list[Row], list[str]]:
     """What is waiting, for display only, and the stores whose queue could not be read.
 
@@ -161,8 +184,8 @@ def queue(sh: Shell) -> tuple[list[Row], list[str]]:
     helper, result = read_aur_queue(sh.has, sh.capture)
     if helper:
         take("aur", result, (0, 1))
-    for store, read in (("flatpak", _flatpak), ("snap", _snap)):
-        if sh.has(store):
+    for store, read, tool in (("flatpak", _flatpak, "flatpak"), ("snap", _snap, "snap"), ("firmware", _firmware, "fwupdmgr")):
+        if sh.has(tool):
             found = read(sh)
             unread.append(store) if found is None else rows.extend(found)
     return rows, unread
@@ -238,6 +261,7 @@ class Screen:
         self.resize(size)
         self.rows: list[Row] | None = None  # None: still reading
         self.unread: list[str] = []
+        self.download: int | None = None  # bytes the repository queue downloads; None: not read
         self.unread_reason = "install pacman-contrib"
         self.verdicts: list[dict[str, Any]] | None = None
         self.password_later = False  # sudo will ask for the password when the owner says yes
@@ -279,7 +303,7 @@ class Screen:
 
         `room` is the most lines the table may take, header and the "+ N more" line included; at least one row stays.
         """
-        source = [row.store.upper() + ("" if row.store != "aur" or self.aur_on else " · BY HAND") for row in rows]
+        source = [row.store.upper() + (" · BY HAND" if (row.store == "aur" and not self.aur_on) or row.store == "firmware" else "") for row in rows]
         gap = lambda head, values: max(len(head), *map(len, values)) + 3  # noqa: E731
         columns = [
             ("PACKAGE", min(36, gap("PACKAGE", [r.name for r in rows])), [r.name for r in rows], WHITE),
@@ -307,8 +331,12 @@ class Screen:
         rows = self.rows or []
         counts = [(store, sum(row.store == store for row in rows)) for store in STORE_NAMES]
         text = " · ".join(f"{count} from {STORE_NAMES[store]}" for store, count in counts if count)
+        if self.download:
+            text += f" · {space.amount(self.download)} to download"
         if self.aur_on is False and any(row.store == "aur" for row in rows):
             text += f" (by hand: {auto.AUR_BY_HAND})"
+        if any(row.store == "firmware" for row in rows):
+            text += f" (firmware by hand: {FIRMWARE_BY_HAND})"
         bad = [
             ink(RED, f"cannot read the repositories: {self.unread_reason}" if store == "repo" else f"cannot read the {STORE_NAMES[store]} queue")
             for store in self.unread
@@ -670,6 +698,8 @@ def ask(
 
     def read_queue() -> None:
         screen.rows, screen.unread = queue(sh)
+        if "repo" not in screen.unread:
+            screen.download = space.download_total(sh, [row.name for row in screen.rows if row.store == "repo"])
         screen.unread_reason = "install pacman-contrib" if not sh.has("checkupdates") else "checkupdates failed"
         paint()
 

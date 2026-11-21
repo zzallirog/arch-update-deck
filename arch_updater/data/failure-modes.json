@@ -136,6 +136,17 @@
       "origin": "official"
     },
     {
+      "id": "AUR-CACHE-GIT-DAMAGED",
+      "match": "(?im)^\\s*(->\\s*)?error fetching [A-Za-z0-9@_+][A-Za-z0-9@._+-]*:\\s*fatal: (cannot rebase onto multiple branches|not a git repository)",
+      "stage": "aur-update",
+      "meaning": "yay could not fetch a package into its cache: the folder's .git is damaged, so git does not see a repository there and looks in the folders above it, up to the repository of the home folder.",
+      "response": "Verify the named folder is a direct non-symlink yay cache child and that git finds no repository in it, rename it aside (nothing is deleted), then let yay clone it fresh once. yay and paru also run with a git ceiling at the cache home from now on.",
+      "automatic": true,
+      "repair": "quarantine-broken-aur-cache",
+      "fix": "grep -h \"error fetching\" ~/.local/state/arch-updater/runs/*/run.log | tail -n 2",
+      "origin": "official"
+    },
+    {
       "id": "AUR-SOURCE-REMOTE-PREDICATE",
       "match": "(?i)(is not a clone of|does not match.*url|remote.*mismatch)",
       "stage": "aur-source",

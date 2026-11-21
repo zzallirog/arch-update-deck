@@ -38,6 +38,7 @@ GROUP_BARE = r"[A-Za-z0-9@_+][A-Za-z0-9@._+-]{0,63}"  # bounded: a package name 
 GROUP_NAMED = r"[A-Za-z0-9@_+][A-Za-z0-9@._+-]{0,63}?"  # followed by -version-release
 VERSION = r"\d[\w.+:~]{0,31}-\d{1,6}(?:\.\d{1,3})?"
 RUNNING = re.compile(r"^\[(?P<at>[^\]]+)\] \[PACMAN\] Running '(?P<cmd>.*)'\s*$")
+WARNING = re.compile(r"(?i)^\s*(?:::\s*)?warning:")
 TELLING = re.compile(r"(?i)\b(error|fail(ed|ure)?|conflict|denied|not found|cannot|could not|unable|missing|refus|abort|warning)\b")
 OPTIONS_WITH_VALUE = {
     "--config", "--root", "-r", "--dbpath", "-b", "--cachedir", "--logfile", "--gpgdir", "--sysroot", "--color", "--ask",
@@ -178,7 +179,9 @@ def generalize(output: str, names: list[str]) -> Generalized | None:
     case matches the next pair of packages. None when no name is in the output, or what is left is too little to
     recognise a failure by.
     """
-    lines = [line for line in output.splitlines() if line.strip()]
+    # A pacman `warning:` (`is up to date -- reinstalling`, `directory permissions differ`) is routine output, not the
+    # failure: a pattern read from it would name every healthy run as this case.
+    lines = [line for line in output.splitlines() if line.strip() and not WARNING.match(line)]
     shared = [name for name in dict.fromkeys(names) if any(_mentions(tok.core, name) for line in lines for tok in census.tokens(line))]
     if not shared:
         return None

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -86,6 +87,28 @@ def plan(sh: Shell, db: Path | None = None) -> Plan:
         return Plan(names, read=False, note=f"pacman did not tell the size of {exc}")
     boot = sum(_boot_files(name) for name in names if (PRESETS / f"{name}.preset").is_file())
     return Plan(names, download, growth, boot)
+
+
+def checkup_db() -> Path:
+    """Where `checkupdates` keeps the sync databases it just refreshed, unless CHECKUPDATES_DB moves them."""
+    return Path(os.environ.get("CHECKUPDATES_DB") or Path(tempfile.gettempdir()) / f"checkup-db-{os.getuid()}")
+
+
+def download_total(sh: Shell, names: list[str]) -> int | None:
+    """Bytes the waiting repository packages download, read from the databases `checkupdates` just refreshed; None if unread.
+
+    Display only: it asks pacman nothing that changes a machine, and a failure is "unknown", never a number.
+    """
+    if not names:
+        return 0
+    answer = sh.capture(["env", "LC_ALL=C", "pacman", "-Si", "--dbpath", str(checkup_db()), "--", *names], timeout=60)
+    if answer.returncode != 0:
+        return None
+    try:
+        sizes = _fields(answer.output)
+        return sum(sizes[name]["Download Size"] for name in names)
+    except (KeyError, ValueError):
+        return None
 
 
 def _boot_files(kernel: str) -> int:

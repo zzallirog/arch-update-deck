@@ -56,10 +56,34 @@ C_LOCALE = frozenset({
 WRAPPERS = frozenset({"sudo", "env", "nice", "ionice"})
 
 
+GIT_HELPERS = frozenset({"yay", "paru"})  # AUR helpers that run git inside their own cache folders
+
+
+def cache_home() -> Path:
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+
+
+def with_git_ceiling(env: dict[str, str]) -> dict[str, str]:
+    """The environment with git kept inside the cache folder.
+
+    A cache folder whose `.git` is damaged is not a repository to git, so git looks one level up, and the next, until
+    it finds one: the repository of the home folder. An AUR helper pulling and resetting there would rewrite the
+    person's own files. With the cache home as a ceiling git stops at it and says "not a repository" instead.
+    """
+    ceiling = [item for item in env.get("GIT_CEILING_DIRECTORIES", "").split(os.pathsep) if item]
+    if str(cache_home()) not in ceiling:
+        ceiling.append(str(cache_home()))
+    return {**env, "GIT_CEILING_DIRECTORIES": os.pathsep.join(ceiling)}
+
+
 def environment(argv: Sequence[str]) -> dict[str, str] | None:
-    """The environment a command runs in: this one with LC_ALL=C when its output is parsed (C_LOCALE), else None."""
+    """The environment a command runs in: this one with LC_ALL=C when its output is parsed (C_LOCALE), else None.
+
+    An AUR helper (GIT_HELPERS) also gets a git ceiling, see with_git_ceiling."""
     for word in argv:
         name = Path(word).name
+        if name in GIT_HELPERS:
+            return with_git_ceiling({**os.environ, "LC_ALL": "C"} if name in C_LOCALE else dict(os.environ))
         if name in C_LOCALE:
             return {**os.environ, "LC_ALL": "C"}
         if not (name in WRAPPERS or word.startswith("-") or "=" in word):
@@ -516,8 +540,56 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def aur_cache_root() -> Path:
-    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return cache_home / "yay"
+    return cache_home() / "yay"
+
+
+def _set_aside(candidate: Path, root: Path, run_id: str) -> Path:
+    """Rename a cache folder to `<name>.quarantine-<run id>` beside it (never deleted); the new path."""
+    quarantine = root / f"{candidate.name}.quarantine-{run_id}"
+    suffix = 1
+    while quarantine.exists():
+        quarantine = root / f"{candidate.name}.quarantine-{run_id}-{suffix}"
+        suffix += 1
+    candidate.replace(quarantine)
+    return quarantine
+
+
+def _is_own_repository(folder: Path, root: Path) -> bool:
+    """True when git, kept inside `root`, finds a repository in `folder` itself. A damaged `.git` says False."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(folder), "rev-parse", "--git-dir"],
+            env=with_git_ceiling(dict(os.environ)), stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True  # cannot tell: leave the folder alone
+    return done.returncode == 0
+
+
+def quarantine_broken_aur_caches(output: str, run_id: str) -> list[dict[str, str]]:
+    """Set aside a yay cache whose `.git` is damaged, the folders yay's fetch error names.
+
+    Only a real folder directly inside the yay cache, named in `error fetching <name>: fatal: ...`, and only when
+    git finds no repository in it. Such a folder holds nothing yay cannot download again; yay clones it fresh on the
+    retry. Nothing is deleted.
+    """
+    root = aur_cache_root()
+    root_resolved = root.resolve()
+    names = re.findall(
+        r"(?im)^\s*(?:->\s*)?error fetching\s+([A-Za-z0-9@_+][A-Za-z0-9@._+-]{0,63}):\s*fatal: "
+        r"(?:Cannot rebase onto multiple branches|not a git repository|not a git repository \(or any parent up to mount point[^)]*\))",
+        output,
+    )
+    recovered: list[dict[str, str]] = []
+    for name in dict.fromkeys(names):
+        candidate = root / name
+        if candidate.is_symlink() or not candidate.is_dir() or candidate.parent.resolve() != root_resolved:
+            continue
+        if _is_own_repository(candidate, root):
+            continue
+        moved = _set_aside(candidate, root, run_id)
+        recovered.append({"package": name, "from": str(candidate), "to": str(moved), "reason": "damaged .git"})
+    return recovered
 
 
 def quarantine_missing_aur_caches(output: str, run_id: str) -> list[dict[str, str]]:
@@ -540,12 +612,7 @@ def quarantine_missing_aur_caches(output: str, run_id: str) -> list[dict[str, st
             or (candidate / "PKGBUILD").is_file()
         ):
             continue
-        quarantine = root / f"{candidate.name}.quarantine-{run_id}"
-        suffix = 1
-        while quarantine.exists():
-            quarantine = root / f"{candidate.name}.quarantine-{run_id}-{suffix}"
-            suffix += 1
-        candidate.replace(quarantine)
+        quarantine = _set_aside(candidate, root, run_id)
         recovered.append(
             {
                 "package": candidate.name,

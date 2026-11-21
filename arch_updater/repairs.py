@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import aur_handoff, census
-from .engine import quarantine_missing_aur_caches
+from .engine import quarantine_broken_aur_caches, quarantine_missing_aur_caches
 
 if TYPE_CHECKING:
     from .auto import World
@@ -65,6 +65,12 @@ def quarantine_aur_cache(world: World) -> bool:
     return bool(moved)
 
 
+def quarantine_broken_aur_cache(world: World) -> bool:
+    moved = quarantine_broken_aur_caches(world.output, world.run_id)
+    world.note("quarantine", caches=moved)
+    return bool(moved)
+
+
 def rebuild_initramfs(world: World) -> bool:
     world.command(sudo(MKINITCPIO))
     return True
@@ -104,6 +110,7 @@ ACTIONS: dict[str, Callable[[World], bool]] = {
     "wait-for-dns": wait_for_dns,
     "wait-for-mirror": wait_for_mirror,
     "quarantine-aur-cache": quarantine_aur_cache,
+    "quarantine-broken-aur-cache": quarantine_broken_aur_cache,
     "rebuild-initramfs": rebuild_initramfs,
     "rebuild-dkms": rebuild_dkms,
     "rebuild-against-new-libraries": rebuild_against_new_libraries,

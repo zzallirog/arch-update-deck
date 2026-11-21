@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.07. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.08. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -21,6 +21,7 @@ By what each program is used for.
 | Weekly run while logged out | Lingering: `loginctl enable-linger` | The user manager, and with it the timer, runs only while you are logged in. |
 | AUR | `yay` or `paru`: the first one installed lists the waiting packages (Update Day, `status`, patrol) and, with `unattended_aur`, builds them; an unattended build uses `yay` only, and needs the root shim | No AUR rows, no AUR updates. See [AUR](../README.md#aur). |
 | Flatpak, Snap | `flatpak`, `snap` | Those stores are skipped. |
+| Firmware on Update Day | `fwupdmgr` (package `fwupd`) | No firmware rows. |
 | Desktop notice | `notify-send` (package `libnotify`) | No notification is sent. |
 | Click-to-fix | `systemd-run`, a recognised terminal (see [Schedule and ask mode](#schedule-and-ask-mode)), and a `notify-send` that supports `--wait` and `--action` | The notice has no click action. |
 | Ask mode | A recognised terminal, and a graphical session known to the systemd user manager | The weekly run updates without asking. |
@@ -58,7 +59,7 @@ read.
 | Part | Content |
 |---|---|
 | Header | `UPDATE DAY`, weekday, date and time. |
-| Table | One row per waiting package: `PACKAGE`, `INSTALLED`, `AVAILABLE`, `FROM`. `FROM` is `REPO`, `AUR`, `FLATPAK` or `SNAP`; an AUR row says `AUR · BY HAND` unless `unattended_aur` is `true`. Up to 124 columns wide. On a narrow terminal `INSTALLED` is dropped first, then `AVAILABLE`. If the rows do not fit the height, the table keeps its header, as many rows as fit (at least one) and a line `+ N more`; it never scrolls. |
+| Table | One row per waiting package: `PACKAGE`, `INSTALLED`, `AVAILABLE`, `FROM`. `FROM` is `REPO`, `AUR`, `FLATPAK`, `SNAP` or `FIRMWARE`; an AUR row says `AUR · BY HAND` unless `unattended_aur` is `true`, and a firmware row always says `FIRMWARE · BY HAND` (the tool lists firmware, a person runs `fwupdmgr update`). Up to 124 columns wide. On a narrow terminal `INSTALLED` is dropped first, then `AVAILABLE`. If the rows do not fit the height, the table keeps its header, as many rows as fit (at least one) and a line `+ N more`; it never scrolls. |
 | `TOTAL` | How many packages come from each source. `(by hand: yay -Sua)` follows when AUR rows are present and `unattended_aur` is off. A source that could not be read is named in red (`cannot read the repositories: install pacman-contrib` or `checkupdates failed`; `cannot read the snap queue`). `nothing waiting` is printed only when every queue was read and all are empty. |
 | `MACHINE` | `fine · N checks`, where N is the number of verdicts: 8 with no configured conditions, plus one per condition and one more when `home_bssid` is set. A failed check is a red line `<check>: <detail>`; the checks and their screen names are in the [table](#sequence-of-the-update). If the root check is the one that fails, you are not root and stdin and stdout are terminals, it counts as passed and the line ends `sudo asks for your password on yes`. If `sudo` is not installed the line is red and says `sudo is not installed: install it, y cannot continue`, and `y` ends with exit status 70. |
 | `PENDING` | The problems left by the last real update (`last-auto.json`), one red line each: `<check> → <fix>`. `nothing since last time` if none. When you are at a terminal as a user with `sudo` installed, entries of the cases `NO-ROOT` and `SUDO-TIMESTAMP-EXPIRED` are left out, because `y` asks for the password; `auto --status` still lists them. Notes (the starter-configuration notice; `weekly update is off: arch-update schedule --install-auto` when the weekly timer is known not to be installed) are dim lines under it. |
@@ -252,6 +253,23 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.08
+
+- A yay cache folder whose `.git` is damaged (an index and logs, no `HEAD`) is not a repository to
+  git: git looks in the folders above it, up to the repository of the home folder, and yay pulls
+  there. `yay` and `paru` now run with `GIT_CEILING_DIRECTORIES` set to the cache home (what the
+  person had set is kept), so git stops at it. The new case `AUR-CACHE-GIT-DAMAGED` (`error fetching
+  <name>: fatal: Cannot rebase onto multiple branches` or `not a git repository`) has the repair
+  `quarantine-broken-aur-cache`, which renames such a folder to `<name>.quarantine-<run id>` when git
+  finds no repository in it. Nothing is deleted.
+- A pacman `warning:` line is never the pattern of a witnessed fix: `is up to date -- reinstalling`
+  named every healthy run as a failure.
+- Update Day lists firmware that LVFS has a newer release for (`fwupdmgr get-updates`, read only,
+  when `fwupdmgr` is installed): `FROM` says `FIRMWARE · BY HAND`, and `TOTAL` names
+  `fwupdmgr update`. The tool never flashes. `TOTAL` also shows how much the repository queue
+  downloads (`6 MiB to download`), read from the databases `checkupdates` just refreshed; when that
+  cannot be read, nothing is shown.
 
 ### Changed in 0.20.07
 
@@ -933,7 +951,7 @@ The sequence is the program in `arch_updater/control.tis`, executed by
 
 `arch_updater/data/failure-modes.json` is the shipped catalogue (installed under
 `~/.local/share/arch-update-deck/arch_updater/data/`). An entry has an `id`, a
-`meaning`, a `fix`, optionally a `repair`, and for twenty-eight of the forty-four a
+`meaning`, a `fix`, optionally a `repair`, and for twenty-nine of the forty-five a
 `match` (a regular expression searched in the failing command's output); the
 other sixteen have none and are raised by the checks. The `fix` is one command to run by
 hand, on one line, readable by `sh`, with no placeholder. It is never the command
@@ -953,6 +971,7 @@ is not repaired:
 | `wait-for-dns` | `resolvectl flush-caches`, then waits up to 60 s for `archlinux.org` to resolve. |
 | `wait-for-mirror` | Waits 60 s. |
 | `quarantine-aur-cache` | Renames a `yay` cache directory that has no `PKGBUILD` to `<name>.quarantine-<run id>` in the same directory. Only a real directory directly inside the cache, named in yay's "error downloading sources" line. Nothing is deleted. |
+| `quarantine-broken-aur-cache` | Renames a `yay` cache directory in which git finds no repository of its own (a damaged `.git`) to `<name>.quarantine-<run id>` in the same directory. Only a real directory directly inside the cache, named in yay's `error fetching <name>: fatal: ...` line. Nothing is deleted; yay clones the package fresh on the retry. |
 | `rebuild-initramfs` | `sudo -n mkinitcpio -P`. |
 | `rebuild-dkms` | `sudo -n dkms autoinstall` (for the running kernel; a kernel installed later is built by its pacman hook). |
 | `rebuild-against-new-libraries` | `yay -S --rebuild` of the `rebuild` packages named in `smoke`. Only with `unattended_aur` on and `yay` installed. |
@@ -980,6 +999,7 @@ The shipped cases (`arch-update vault` prints them with their `meaning`):
 | `MIRROR-STALE-404` | `wait-for-mirror` | `sudo pacman -Syyu` |
 | `AUR-CACHE-UPSTREAM-MISSING` | - | `less +G "$(ls -td ~/.local/state/arch-updater/runs/*/ \| head -n 1)run.log"` |
 | `AUR-CACHE-PKGBUILD-MISSING` | `quarantine-aur-cache` | `grep -h "error downloading sources" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 1` |
+| `AUR-CACHE-GIT-DAMAGED` | `quarantine-broken-aur-cache` | `grep -h "error fetching" ~/.local/state/arch-updater/runs/*/run.log \| tail -n 2` |
 | `AUR-SOURCE-REMOTE-PREDICATE` | - | `less +G "$(ls -td ~/.local/state/arch-updater/runs/*/ \| head -n 1)run.log"` |
 | `AUR-GIT-LFS-PROTOCOL` | - | `sudo pacman -S --needed git-lfs` |
 | `SUDO-TIMESTAMP-EXPIRED` | - | `sh -c 'f=$(mktemp) && arch-update auto --sudoers > "$f" && visudo -cf "$f" && sudo install -m 0440 "$f" /etc/sudoers.d/zzz-arch-update-auto; rm -f "$f"'` |
