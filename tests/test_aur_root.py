@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
+import types
 import tarfile
 import time
 from pathlib import Path
@@ -272,13 +275,13 @@ def test_the_reason_of_a_set_aside_entry_reaches_the_screen_without_control_char
     assert held == ["x: bad[31mred", "y: set aside after the shim refused it", "z: set aside after the shim refused it"]
 
 
-def test_an_update_with_a_dependency_that_is_not_installed_waits_for_a_person(tmp_path) -> None:
-    deps = {"MakeDepends": ["git", "python-build", "python-setuptools>=40.8.0"], "Depends": ["qt6-base"]}
-    needy = {**entry("zap"), **deps}
+def test_only_a_dependency_no_repository_has_holds_an_update(tmp_path) -> None:
+    needy = {**entry("zap"), "MakeDepends": ["git", "python-build", "libaur-only>=2"], "Depends": ["qt6-base"]}
+    repo_only = {**entry("fine"), "MakeDepends": ["python-build"]}
     plain = {**entry("ok"), "Depends": ["qt6-base"]}
-    look = Look({"zap": "1", "ok": "1"}, [needy, plain], absent=["python-build", "python-setuptools"])
+    look = Look({"zap": "1", "fine": "1", "ok": "1"}, [needy, repo_only, plain], absent=["python-build", "libaur-only"], aur_only=["libaur-only"])
     held = stores.aur_review(look, 7, tmp_path / "maintainers.json")[1]
-    assert held == ["zap: needs python-build, python-setuptools>=40.8.0 installed first; the unattended update only installs updates"]
+    assert held == ["zap: needs libaur-only>=2 installed first (no repository has it)"], "python-build comes from a repository: the shim installs it"
 
 
 def test_pacman_not_answering_about_dependencies_holds_nothing(tmp_path) -> None:
@@ -304,6 +307,186 @@ def test_a_failed_pacman_listing_does_not_hold_a_package(tmp_path) -> None:
             return super().capture(argv, timeout)
 
     assert stores.aur_review(Failing({"x": "1"}, [entry("x")]), 7, tmp_path / "maintainers.json")[1] == []
+
+
+SYNC_INFO = """Repository      : extra
+Name            : python-build
+Replaces        : None
+
+Repository      : core
+Name            : git
+Replaces        : None
+"""
+
+
+REAL_RUN = subprocess.run
+
+
+class Pacman:
+    """subprocess.run as the shim sees it: -Si answers from `info`, installs return `rc`; every pacman command line is kept."""
+
+    def __init__(self, info=SYNC_INFO, rc=0, info_rc=0):
+        self.info, self.rc, self.info_rc, self.calls = info, rc, info_rc, []
+        self.installed, self.pinned, self.pinned_groups, self.conf_rc = [], [], [], 0
+
+    def __call__(self, argv, **kw):
+        if argv[0] == "/usr/bin/pacman-conf":
+            words = self.pinned if argv[-1] == "IgnorePkg" else self.pinned_groups
+            return subprocess.CompletedProcess(argv, self.conf_rc, stdout="".join(f"{w}\n" for w in words), stderr="error: config unreadable\n")
+        if argv[0] != "/usr/bin/pacman":
+            return REAL_RUN(argv, **kw)
+        self.calls.append(list(argv))
+        if argv[1] == "-Qq":
+            return subprocess.CompletedProcess(argv, 0, stdout="".join(f"{w}\n" for w in self.installed), stderr="")
+        if argv[1] == "-Si":
+            return subprocess.CompletedProcess(argv, self.info_rc, stdout=self.info, stderr="error: package 'nope' was not found\n")
+        return subprocess.CompletedProcess(argv, self.rc)
+
+
+@pytest.fixture
+def root_shim(tmp_path, monkeypatch):
+    """The shim's main() with a fake root, a fake home and a fake pacman."""
+    home = tmp_path / "home"
+    stage = home / aur_root.STAGE
+    stage.mkdir(parents=True, mode=0o700)
+    monkeypatch.setattr(aur_root, "WORK", tmp_path / "work")
+    monkeypatch.setattr(aur_root.sys, "argv", ["shim"])
+    monkeypatch.setattr(aur_root.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_UID", str(os.getuid()))
+    monkeypatch.setattr(aur_root.pwd, "getpwuid", lambda uid: types.SimpleNamespace(pw_dir=str(home)))
+    monkeypatch.setattr(aur_root, "installed_foreign", lambda: INSTALLED)
+    pacman = Pacman()
+    monkeypatch.setattr(aur_root.subprocess, "run", pacman)
+    pacman.stage = stage
+    return pacman
+
+
+def test_the_shim_installs_the_repository_packages_of_a_build_as_dependencies(root_shim) -> None:
+    (root_shim.stage / "repo-deps").write_text("extra/python-build\ngit\n")
+    assert aur_root.main() == 0
+    assert root_shim.calls == [["/usr/bin/pacman", "-Si", "--config", "/etc/pacman.conf", "--", "extra/python-build", "git"], ["/usr/bin/pacman", "-Qq"],
+                               ["/usr/bin/pacman", "-S", "--asdeps", "--needed", "--noconfirm", "--config", "/etc/pacman.conf", "--", "extra/python-build", "git"]]
+
+
+def test_the_shim_installs_the_dependencies_before_the_packages(root_shim) -> None:
+    (root_shim.stage / "repo-deps").write_text("git\n")
+    package(root_shim.stage / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    assert aur_root.main() == 0
+    assert [call[1] for call in root_shim.calls] == ["-Si", "-Qq", "-S", "-U"]
+
+
+def test_a_failed_dependency_install_stops_before_the_packages(root_shim) -> None:
+    root_shim.rc = 1
+    (root_shim.stage / "repo-deps").write_text("git\n")
+    package(root_shim.stage / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    assert aur_root.main() == 1
+    assert [call[1] for call in root_shim.calls] == ["-Si", "-Qq", "-S"]
+
+
+@pytest.mark.parametrize("text", ["--needed\n", "git extra\n", "git;id\n", "../git\n", "extra/Git\n", "\n", "x/y/z\n", "git>=2\n", "-S\n"])
+def test_a_line_that_is_not_a_repository_name_refuses_the_whole_stage(root_shim, text) -> None:
+    (root_shim.stage / "repo-deps").write_text(text)
+    package(root_shim.stage / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    assert aur_root.main() == 2
+    assert root_shim.calls == [], "nothing was asked of pacman"
+
+
+def test_the_dependency_file_must_be_a_plain_file_that_is_small_and_text(root_shim) -> None:
+    good = root_shim.stage.parent / "valid-names"
+    good.write_text("git\n")                                   # a link to a perfectly valid file is still refused
+    for make in (lambda p: p.symlink_to(good), lambda p: p.write_text("git\n" + " " * 9000), lambda p: p.write_bytes(b"\xff\xfe"),
+                 lambda p: p.write_text("git\n" * 65), lambda p: p.mkdir()):
+        for old in root_shim.stage.iterdir():
+            old.rmdir() if old.is_dir() and not old.is_symlink() else old.unlink()
+        make(root_shim.stage / "repo-deps")
+        assert aur_root.main() == 2
+    assert root_shim.calls == []
+
+
+def test_a_name_the_databases_do_not_know_or_that_replaces_something_refuses(root_shim) -> None:
+    (root_shim.stage / "repo-deps").write_text("git\n")
+    root_shim.info_rc = 1
+    assert aur_root.main() == 2
+    root_shim.info_rc = 0
+    root_shim.info = "Repository      : extra\nName            : git\nReplaces        : old-git\n"
+    assert aur_root.main() == 2
+    root_shim.info = SYNC_INFO
+    (root_shim.stage / "repo-deps").write_text("core/python-build\n")
+    assert aur_root.main() == 2, "python-build is in extra, not in core"
+    assert not [c for c in root_shim.calls if c[1] == "-S"]
+
+
+def test_a_package_pacman_conf_holds_back_is_refused(root_shim) -> None:
+    root_shim.info = "Repository      : extra\nName            : hyprland\nGroups          : None\nReplaces        : None\n"
+    (root_shim.stage / "repo-deps").write_text("hyprland\n")
+    root_shim.pinned = ["hunspell-uk", "hyprland"]
+    assert aur_root.main() == 2
+    root_shim.pinned = []
+    root_shim.info = "Repository      : extra\nName            : hyprland\nGroups          : wm-stuff other\nReplaces        : None\n"
+    root_shim.pinned_groups = ["wm-stuff"]
+    assert aur_root.main() == 2
+    root_shim.pinned_groups = []
+    assert aur_root.main() == 0
+    assert [c[1] for c in root_shim.calls].count("-S") == 1, "only the unpinned run installed"
+
+
+def test_a_pacman_conf_that_cannot_be_read_refuses(root_shim) -> None:
+    (root_shim.stage / "repo-deps").write_text("git\n")
+    root_shim.conf_rc = 1
+    assert aur_root.main() == 2
+    assert not [c for c in root_shim.calls if c[1] == "-S"]
+
+
+def test_an_installed_package_is_left_alone_not_demoted_to_a_dependency(root_shim) -> None:
+    (root_shim.stage / "repo-deps").write_text("git\nextra/python-build\n")
+    root_shim.installed = ["git"]
+    assert aur_root.main() == 0
+    assert root_shim.calls[-1][-1:] == ["extra/python-build"] and "git" not in root_shim.calls[-1], root_shim.calls[-1]
+    root_shim.calls.clear()
+    root_shim.installed = ["git", "python-build"]
+    assert aur_root.main() == 0
+    assert not [c for c in root_shim.calls if c[1] == "-S"], "everything is there: nothing to install"
+
+
+def test_the_stage_still_refuses_anything_else(root_shim) -> None:
+    (root_shim.stage / "repo-deps").write_text("git\n")
+    (root_shim.stage / "notes.txt").write_text("x")
+    assert aur_root.main() == 2
+    assert root_shim.calls == []
+
+
+@pytest.mark.parametrize("argv,names", [
+    (["pacman", "-S", "--noconfirm", "--config", "/etc/pacman.conf", "--", "extra/python-build", "git"], ["extra/python-build", "git"]),
+    (["pacman", "-S", "--asdeps", "--needed", "--noconfirm", "--config", "/etc/pacman.conf", "--", "git"], ["git"]),
+    (["pacman", "-S", "--noconfirm", "--config", "/etc/pacman.conf", "--"], None),
+    (["pacman", "-S", "--noconfirm", "--", "git"], None),
+    (["pacman", "-S", "--noconfirm", "--config", "/tmp/evil.conf", "--", "git"], None),
+    (["pacman", "-S", "--overwrite", "*", "--noconfirm", "--config", "/etc/pacman.conf", "--", "git"], None),
+    (["pacman", "-Sy", "--noconfirm", "--config", "/etc/pacman.conf", "--", "git"], None),
+    (["pacman", "-S", "--noconfirm", "--config", "/etc/pacman.conf", "--", "git", "--overwrite=*"], None),
+    (["pacman", "-S", "--noconfirm", "--config", "/etc/pacman.conf", "--", "https://evil/x.pkg.tar.zst"], None),
+    (["pacman", "-S", "--noconfirm", "--config", "/etc/pacman.conf", "--"] + ["a"] * 65, None),
+])
+def test_only_the_plain_dependency_install_of_yay_is_taken(argv, names) -> None:
+    assert aur_handoff.repo_request(argv) == names
+
+
+def test_the_hand_over_stages_the_repository_names_and_runs_only_the_shim(hand) -> None:
+    sh = Hand([])
+    seen = []
+    sh.interactive = lambda argv: seen.append((argv, {p.name: p.read_text() for p in (hand / "stage").iterdir()})) or 0
+    argv = ["pacman", "-S", "--noconfirm", "--config", "/etc/pacman.conf", "--", "extra/python-installer", "extra/python-build"]
+    assert aur_handoff.handoff(argv, 7, sh) == 0
+    assert seen == [(["sudo", "-n", str(aur_handoff.SHIM)], {"repo-deps": "extra/python-installer\nextra/python-build\n"})]
+    assert not list((hand / "stage").iterdir()), "the stage is emptied after the shim"
+
+
+def test_an_older_shim_gets_no_dependency_request(hand) -> None:
+    aur_handoff.SHIM.write_bytes(b"old")
+    sh = Hand([])
+    sh.interactive = lambda argv: pytest.fail("the shim must not run")
+    argv = ["pacman", "-S", "--noconfirm", "--config", "/etc/pacman.conf", "--", "git"]
+    assert aur_handoff.handoff(argv, 7, sh) == 1
 
 
 def test_the_version_is_read_from_the_package_file_name() -> None:
@@ -373,8 +556,8 @@ def test_a_refused_package_never_reaches_sudo(hand) -> None:
 
 
 class Look:
-    def __init__(self, installed, results, paths=None, absent=()):
-        self.installed, self.results, self.paths, self.absent = installed, results, paths or {}, set(absent)
+    def __init__(self, installed, results, paths=None, absent=(), aur_only=()):
+        self.installed, self.results, self.paths, self.absent, self.aur_only = installed, results, paths or {}, set(absent), set(aur_only)
 
     def capture(self, argv, timeout=30):
         from arch_updater.engine import CommandResult
@@ -385,6 +568,8 @@ class Look:
             return CommandResult(argv, 0, "\n".join(f"{n} {v}" for n, v in self.installed.items()) + "\n")
         if argv[0] == "vercmp":
             return CommandResult(argv, 0, "1" if argv[1] != argv[2] else "0")
+        if argv[:2] == ["pacman", "-Sp"]:
+            return CommandResult(argv, 1 if argv[-1].split(">")[0].split("<")[0].split("=")[0] in self.aur_only else 0, "")
         if argv[:3] == ["pacman", "-T", "--"]:
             missing = [dep for dep in argv[3:] if dep.split(">")[0].split("<")[0].split("=")[0] in self.absent]
             return CommandResult(argv, 127 if missing else 0, "".join(f"{dep}\n" for dep in missing))

@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.10. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.11. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -253,6 +253,22 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.11
+
+- The root shim takes one more request: the repository packages a build asks for as
+  dependencies (`pacman -S --asdeps`, names only, see the shim above). Until now such a
+  request was refused after the build, which ended the whole unattended AUR step. Because the
+  shim's bytes changed, `arch-update` refuses to use the installed copy until it is installed
+  again (`sudo install -D -o root -g root -m 0755 ... /usr/local/libexec/arch-update-aur-install`;
+  the message prints the exact command). `arch-update auto --sudoers --aur` says in its
+  description of the rule what the shim now does. The sudoers line is unchanged.
+- The hold from 0.20.10 now covers only a dependency no repository has (another AUR package),
+  not one the shim installs: `needs libfoo installed first (no repository has it)`.
+- The shim leaves alone a package that is installed, one `IgnorePkg` or `IgnoreGroup` holds
+  back, and one that replaces another. It installs new packages only, so it never upgrades
+  by itself; a repository dependency of a new package can still be upgraded by pacman, as with
+  any `pacman -S` after the weekly `pacman -Syu` of the same run.
 
 ### Changed in 0.20.10
 
@@ -831,9 +847,12 @@ the result block of Update Day prints the same.
 - `arch-update aur-handoff` is what `yay` runs instead of `sudo`. It answers
   `pacman -D -q --asexplicit|--asdeps ...` with success and does nothing (an
   update keeps the install reason). It accepts exactly `pacman -U --noconfirm
-  --config /etc/pacman.conf -- <files>` and refuses everything else with exit 1,
-  so a build that needs a new dependency from the repositories fails and is
-  reported. It checks the files as the shim will, reads the AUR age of each
+  --config /etc/pacman.conf -- <files>` and, for the dependencies of a build,
+  `pacman -S [--asdeps] [--needed] --noconfirm --config /etc/pacman.conf -- <names>`
+  with 1 to 64 package names (`name` or `repo/name`, lower case, no option, path
+  or version); it refuses everything else with exit 1. A `-S` request is written to
+  the stage as the file `repo-deps` and handed to the shim (below). For `-U` it
+  checks the files as the shim will, reads the AUR age of each
   package again (an entry that changed while the run was building is refused),
   copies the files into `~/.cache/arch-updater/aur-stage`, runs
   `sudo -n /usr/local/libexec/arch-update-aur-install` and empties the stage.
@@ -859,6 +878,19 @@ the result block of Update Day prints the same.
   `/usr/lib` or `/usr/share`. One refusal refuses the batch: exit 2, nothing
   installed, every reason printed. Otherwise it runs `pacman -U --noconfirm
   --config /etc/pacman.conf -- <copies>` and exits 0 or 1.
+- The stage may also hold one file, `repo-deps`: the repository packages a build asks
+  for, one name per line. The shim reads it without following a link (a plain file,
+  at most 8 KiB, 1 to 64 lines, each `name` or `repo/name` in lower case). Before
+  anything is installed it asks `pacman -Si` about every name: it must be a package of
+  a sync database of `/etc/pacman.conf` (in the named one, when `repo/` is given) and
+  must `Replaces` nothing and must not be held back by `IgnorePkg` or `IgnoreGroup` of
+  `pacman.conf` (`pacman -S --noconfirm` would answer "install anyway" with yes). A name that
+  is already installed is dropped from the list: `--asdeps` would turn an explicit install into a
+  dependency. A check that cannot run (`pacman-conf` fails) refuses. Then it runs `pacman -S --asdeps --needed --noconfirm
+  --config /etc/pacman.conf -- <names>` and only afterwards, if packages are staged,
+  `pacman -U`. A failed dependency install ends the run, exit 1. What stays: a
+  build that passed the cool-down can have any package of the repositories installed
+  as a dependency, which is the kind of change the weekly `pacman -Syu` makes anyway.
 - `arch-update auto --sudoers --aur` adds one rule:
   `<user> ALL=(root) NOPASSWD: /usr/local/libexec/arch-update-aur-install ""`.
   The `""` allows no argument at all.

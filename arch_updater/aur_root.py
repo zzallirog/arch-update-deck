@@ -17,6 +17,15 @@ A package passes only if all of this holds:
   - no path goes through a symbolic link of the same package.
 Anything else refuses the whole batch: nothing is installed, exit 2.
 
+The stage may also hold one file named repo-deps: the repository packages a build asks for
+(`name` or `repo/name`, one per line). They are installed first, as dependencies, and only if every
+name is a package of a sync database from /etc/pacman.conf that replaces nothing installed. A name the
+databases do not know, one that pacman.conf pins (IgnorePkg, IgnoreGroup: `-S --noconfirm` would answer
+"install anyway" with yes), or any other line, refuses the batch the same way. A package that is already
+installed is left alone: --asdeps would turn an explicit install into a dependency. The remaining risk is
+stated, not removed: a build that passed the cool-down can have any repository package installed as a
+dependency. Installing it is what the weekly `pacman -Syu` of the same account already does.
+
 What it cannot check: that the package is what the PKGBUILD meant. The build
 ran as the account; the cool-down before the build is the defence there.
 """
@@ -39,6 +48,10 @@ STAGE = ".cache/arch-updater/aur-stage"  # under the calling account's home
 WORK = Path("/var/cache/arch-update-aur")
 PACKAGE = re.compile(r"[A-Za-z0-9@._+-]+\.pkg\.tar\.zst")
 MAX_FILES = 32
+DEPS = "repo-deps"
+MAX_DEPS = 64
+DEPS_SIZE = 8192
+DEP_NAME = re.compile(r"(?:[a-z0-9][a-z0-9_.-]{0,40}/)?[a-z0-9@_+][a-z0-9@._+-]{0,99}")
 MAX_PACKAGE = 2 << 30  # bytes, compressed
 MAX_CONTENT = 8 << 30  # bytes, all members of one package
 METADATA = {".PKGINFO", ".BUILDINFO", ".MTREE", ".CHANGELOG"}
@@ -251,6 +264,71 @@ def take(stage_fd: int, entry: str, into: Path) -> Path:
         os.close(fd)
 
 
+def read_deps(stage_fd: int) -> list[str]:
+    """The repository packages the build asks for, read without following a link; any other line refuses."""
+    try:
+        fd = os.open(DEPS, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=stage_fd)
+    except OSError as exc:
+        raise Refused(f"{DEPS}: cannot be opened ({exc.strerror})") from None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refused(f"{DEPS}: not a regular file")
+        data = os.read(fd, DEPS_SIZE + 1)
+    finally:
+        os.close(fd)
+    if len(data) > DEPS_SIZE:
+        raise Refused(f"{DEPS}: larger than {DEPS_SIZE} bytes")
+    try:
+        lines = [line.strip() for line in data.decode("utf-8").splitlines() if line.strip()]
+    except UnicodeDecodeError:
+        raise Refused(f"{DEPS}: not text") from None
+    if not lines or len(lines) > MAX_DEPS:
+        raise Refused(f"{DEPS}: {len(lines)} names; 1 to {MAX_DEPS} are taken")
+    bad = [line for line in lines if not DEP_NAME.fullmatch(line)]
+    if bad:
+        raise Refused(f"{DEPS}: not a repository package name: {', '.join(repr(b[:40]) for b in bad[:5])}")
+    return list(dict.fromkeys(lines))
+
+
+def pacman_list(*argv: str) -> set[str]:
+    """Words printed by a pacman tool, or Refused when it fails: a check that cannot run is not passed."""
+    result = subprocess.run(list(argv), env={"PATH": "/usr/bin", "LANG": "C.UTF-8"}, cwd="/", capture_output=True, text=True)
+    if result.returncode != 0:
+        raise Refused(f"{' '.join(argv[:3])} failed: {(result.stderr.strip().splitlines() or ['no message'])[0][:200]}")
+    return set(result.stdout.split())
+
+
+def sync_check(names: list[str]) -> None:
+    """Refuse unless every name is a package of a sync database that replaces nothing (a replacement would swap an installed package unasked)."""
+    env = {"PATH": "/usr/bin", "LANG": "C.UTF-8"}
+    answer = subprocess.run(["/usr/bin/pacman", "-Si", "--config", "/etc/pacman.conf", "--", *names], env=env, cwd="/", capture_output=True, text=True)
+    if answer.returncode != 0:
+        raise Refused(f"{DEPS}: not all in a sync database: {(answer.stderr.strip().splitlines() or ['pacman failed'])[0][:200]}")
+    found: dict[str, list[dict[str, str]]] = {}
+    for block in answer.stdout.split("\n\n"):
+        fields: dict[str, str] = {}
+        for line in block.splitlines():
+            key, sep, value = line.partition(":")
+            if sep:
+                fields.setdefault(key.strip(), value.strip())
+        if "Name" in fields:
+            found.setdefault(fields["Name"], []).append(fields)
+    pinned = pacman_list("/usr/bin/pacman-conf", "--config", "/etc/pacman.conf", "IgnorePkg")
+    pinned_groups = pacman_list("/usr/bin/pacman-conf", "--config", "/etc/pacman.conf", "IgnoreGroup")
+    problems = []
+    for entry in names:
+        repo, _, name = entry.rpartition("/")
+        blocks = [b for b in found.get(name, []) if not repo or b.get("Repository") == repo]
+        if not blocks:
+            problems.append(f"{entry}: not in {repo or 'a sync database'}")
+        elif any(b.get("Replaces", "None") != "None" for b in blocks):
+            problems.append(f"{entry}: replaces {blocks[0].get('Replaces')}")
+        elif name in pinned or pinned_groups & {g for b in blocks for g in b.get("Groups", "None").split()}:
+            problems.append(f"{entry}: pacman.conf holds it back (IgnorePkg or IgnoreGroup)")
+    if problems:
+        raise Refused("\n".join(problems))
+
+
 def main() -> int:
     if os.geteuid() != 0 or len(sys.argv) != 1:
         print("run by sudo, with no arguments", file=sys.stderr)
@@ -276,9 +354,11 @@ def main() -> int:
             if not entries:
                 print("nothing staged")
                 return 0
-            if len(entries) > MAX_FILES or any(not PACKAGE.fullmatch(entry) for entry in entries):
+            packages = [entry for entry in entries if entry != DEPS]
+            if len(packages) > MAX_FILES or any(not PACKAGE.fullmatch(entry) for entry in packages):
                 raise Refused(f"the stage holds something that is not a package file: {', '.join(entries[:5])}")
-            copies = [take(stage_fd, entry, work) for entry in entries]
+            wanted = read_deps(stage_fd) if DEPS in entries else []
+            copies = [take(stage_fd, entry, work) for entry in packages]
         finally:
             os.close(stage_fd)
         installed = installed_foreign()
@@ -286,8 +366,20 @@ def main() -> int:
         for copy in copies:
             checked = inspect(copy, installed)
             names.append(f"{checked['name']} {checked['version']}")
-        print("checked: " + "; ".join(names), flush=True)
+        if names:
+            print("checked: " + "; ".join(names), flush=True)
         env = {"PATH": "/usr/bin", "LANG": "C.UTF-8"}
+        if wanted:
+            sync_check(wanted)
+            have = pacman_list("/usr/bin/pacman", "-Qq")
+            wanted = [entry for entry in wanted if entry.rpartition("/")[2] not in have]
+        if wanted:
+            print("repository packages: " + ", ".join(wanted), flush=True)
+            asked = subprocess.run(["/usr/bin/pacman", "-S", "--asdeps", "--needed", "--noconfirm", "--config", "/etc/pacman.conf", "--", *wanted], env=env, cwd="/")
+            if asked.returncode != 0:
+                return 1
+        if not copies:
+            return 0
         result = subprocess.run(["/usr/bin/pacman", "-U", "--noconfirm", "--config", "/etc/pacman.conf", "--", *map(str, copies)], env=env, cwd="/", check=False)
         return 0 if result.returncode == 0 else 1
     except Refused as refusal:

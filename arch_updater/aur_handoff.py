@@ -36,6 +36,21 @@ INSTALL = ["pacman", "-U", "--noconfirm", "--config", "/etc/pacman.conf", "--"]
 # yay marks install reasons after an install; an update keeps the old reason, so these are answered and skipped.
 REASONS = (["pacman", "-D", "-q", "--asexplicit"], ["pacman", "-D", "-q", "--asdeps"])
 LEARNED = STATE_ROOT / BY_HAND
+# What yay asks for to install the dependencies of a build: these flags, and package names, nothing else.
+SYNC_FLAGS = {"--noconfirm", "--asdeps", "--needed"}
+
+
+def repo_request(argv: list[str]) -> list[str] | None:
+    """The names of `pacman -S [--asdeps] [--needed] --noconfirm --config /etc/pacman.conf -- names`, or None for any other command line."""
+    if argv[:2] != ["pacman", "-S"] or "--" not in argv:
+        return None
+    cut = argv.index("--")
+    names = argv[cut + 1 :]
+    if [flag for flag in argv[2:cut] if flag not in SYNC_FLAGS] != ["--config", "/etc/pacman.conf"]:
+        return None
+    if not names or len(names) > aur_root.MAX_DEPS or not all(aur_root.DEP_NAME.fullmatch(name) for name in names):
+        return None
+    return names
 
 
 def built_version(name: str, package: Path) -> str | None:
@@ -103,6 +118,9 @@ def handoff(argv: list[str], min_age_days: float, sh: Shell | None = None) -> in
     if any(argv[: len(reason)] == reason for reason in REASONS):
         return 0
     argv, ignored = held_back(argv)
+    if wanted := repo_request(argv):
+        print(f"arch-update: repository packages a build asks for, handed to the shim: {' '.join(wanted)}", file=sys.stderr)
+        return deliver(sh, [], wanted)
     if argv[: len(INSTALL)] != INSTALL or len(argv) == len(INSTALL):
         print(f"arch-update: an unattended AUR update only installs packages; refused: {' '.join(argv)[:300]}", file=sys.stderr)
         return 1
@@ -144,6 +162,11 @@ def handoff(argv: list[str], min_age_days: float, sh: Shell | None = None) -> in
     if fresh:
         print(f"arch-update: changed in the AUR while this run was building, nothing installed: {', '.join(fresh)}", file=sys.stderr)
         return 1
+    return deliver(sh, files, [])
+
+
+def deliver(sh: Shell, files: list[Path], wanted: list[str]) -> int:
+    """Stage the package files and the repository names, run the shim once, empty the stage."""
     try:
         current = SHIM.read_bytes() == Path(aur_root.__file__).read_bytes()
     except OSError:
@@ -157,6 +180,8 @@ def handoff(argv: list[str], min_age_days: float, sh: Shell | None = None) -> in
     try:
         for path in files:
             shutil.copyfile(path, STAGE / path.name)
+        if wanted:
+            (STAGE / aur_root.DEPS).write_text("\n".join(wanted) + "\n", encoding="utf-8")
         return sh.interactive(["sudo", "-n", str(SHIM)])
     finally:
         for staged in STAGE.iterdir():

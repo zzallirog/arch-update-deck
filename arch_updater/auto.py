@@ -483,8 +483,9 @@ CONSENT = {
         "follows no link and prints each file it removed"
     ),
     "arch-update-aur-install": (
-        "installs the packages yay built, from one fixed folder, only if they pass its checks; it takes no argument, "
-        "and a package that fails them waits for you and your password"
+        "installs the packages yay built, from one fixed folder, only if they pass its checks, and the repository packages "
+        "a build asks for as dependencies, only if they are new to this machine, not held back by pacman.conf and not a replacement; "
+        "it takes no argument, and a package that fails them waits for you and your password"
     ),
 }
 
