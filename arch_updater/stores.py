@@ -64,7 +64,8 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
     JSON file; an update by hand is what accepts the new maintainer). Also never
     built unasked: an update the root shim would refuse anyway, judged by where the
     installed version lies (root_reads) or because the shim refused it once
-    (BY_HAND beside `state`; a newer version of the package gets a new try, or delete the entry).
+    (BY_HAND beside `state`; a newer version of the package gets a new try, or delete the entry),
+    or an update with a dependency that is not installed (the hand-over installs updates only).
     With `scan`, every other waiting update has its PKGBUILD and .install read
     first (pkgbuild_scan.py); a red flag in them holds it the same way, with the
     flag as its reason.
@@ -107,6 +108,8 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
             unsafe.append(f"{name}: maintainer changed from {seen[base]} to {maintainer}")
         elif why := set_aside(learned.get(name), str(item.get("Version"))):
             unsafe.append(f"{name}: {why}")
+        elif missing := missing_dependencies(sh, item):
+            unsafe.append(f"{name}: needs {', '.join(missing[:6])}{' and more' if len(missing) > 6 else ''} installed first; the unattended update only installs updates")
         elif where := root_reads(name, installed_paths(sh, name)):
             unsafe.append(f"{name}: installs {where}, where root reads; the shim refuses that")
         elif scan and name not in fresh:
@@ -117,6 +120,20 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
         unsafe += [f"{name}: {'; '.join(flags)}" for name in waiting if flags]
     atomic.write(state, json.dumps(seen, indent=1, sort_keys=True))
     return fresh, sorted(unsafe)
+
+
+def missing_dependencies(sh: Shell, item: dict) -> list[str]:
+    """What the AUR entry lists as depends, makedepends and checkdepends that is not installed (pacman -T).
+
+    yay would ask for these through a `pacman -S` (a repository package) or a build of its own (another AUR
+    package), and the hand-over installs updates only: the batch would end after the build, at that request.
+    An answer that is not "all present" or "these are missing" counts as "nothing missing".
+    """
+    wanted = [dep for key in ("Depends", "MakeDepends", "CheckDepends") for dep in (item.get(key) or []) if isinstance(dep, str)]
+    if not wanted:
+        return []
+    answer = sh.capture(["pacman", "-T", "--", *wanted], timeout=60)
+    return answer.output.split() if answer.returncode == 127 else []
 
 
 def read_by_hand(path: Path) -> dict:

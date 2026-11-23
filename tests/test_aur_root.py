@@ -272,6 +272,28 @@ def test_the_reason_of_a_set_aside_entry_reaches_the_screen_without_control_char
     assert held == ["x: bad[31mred", "y: set aside after the shim refused it", "z: set aside after the shim refused it"]
 
 
+def test_an_update_with_a_dependency_that_is_not_installed_waits_for_a_person(tmp_path) -> None:
+    deps = {"MakeDepends": ["git", "python-build", "python-setuptools>=40.8.0"], "Depends": ["qt6-base"]}
+    needy = {**entry("zap"), **deps}
+    plain = {**entry("ok"), "Depends": ["qt6-base"]}
+    look = Look({"zap": "1", "ok": "1"}, [needy, plain], absent=["python-build", "python-setuptools"])
+    held = stores.aur_review(look, 7, tmp_path / "maintainers.json")[1]
+    assert held == ["zap: needs python-build, python-setuptools>=40.8.0 installed first; the unattended update only installs updates"]
+
+
+def test_pacman_not_answering_about_dependencies_holds_nothing(tmp_path) -> None:
+    class Odd(Look):
+        def capture(self, argv, timeout=30):
+            from arch_updater.engine import CommandResult
+
+            if argv[:2] == ["pacman", "-T"]:
+                return CommandResult(argv, 1, "error: something else\n")
+            return super().capture(argv, timeout)
+
+    item = {**entry("zap"), "MakeDepends": ["python-build"], "Depends": None, "CheckDepends": None}
+    assert stores.aur_review(Odd({"zap": "1"}, [item]), 7, tmp_path / "maintainers.json")[1] == []
+
+
 def test_a_failed_pacman_listing_does_not_hold_a_package(tmp_path) -> None:
     class Failing(Look):
         def capture(self, argv, timeout=30):
@@ -351,8 +373,8 @@ def test_a_refused_package_never_reaches_sudo(hand) -> None:
 
 
 class Look:
-    def __init__(self, installed, results, paths=None):
-        self.installed, self.results, self.paths = installed, results, paths or {}
+    def __init__(self, installed, results, paths=None, absent=()):
+        self.installed, self.results, self.paths, self.absent = installed, results, paths or {}, set(absent)
 
     def capture(self, argv, timeout=30):
         from arch_updater.engine import CommandResult
@@ -363,6 +385,9 @@ class Look:
             return CommandResult(argv, 0, "\n".join(f"{n} {v}" for n, v in self.installed.items()) + "\n")
         if argv[0] == "vercmp":
             return CommandResult(argv, 0, "1" if argv[1] != argv[2] else "0")
+        if argv[:3] == ["pacman", "-T", "--"]:
+            missing = [dep for dep in argv[3:] if dep.split(">")[0].split("<")[0].split("=")[0] in self.absent]
+            return CommandResult(argv, 127 if missing else 0, "".join(f"{dep}\n" for dep in missing))
         if argv[:3] == ["pacman", "-Qlq", "--"]:
             return CommandResult(argv, 0, "".join(f"{path}\n" for path in self.paths.get(argv[3], ["/opt/", f"/opt/{argv[3]}"])))
         raise AssertionError(argv)

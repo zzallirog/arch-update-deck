@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.09. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.10. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -253,6 +253,17 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.10
+
+- An AUR update whose dependencies are not installed is held before anything is built. The
+  entry's `depends`, `makedepends` and `checkdepends` are checked with `pacman -T`; what is missing
+  is named in the held line (`kwin-x11: needs kdoctools installed first; the unattended update only
+  installs updates`). yay would ask for those through `pacman -S` or build another AUR package, and
+  the hand-over installs updates only, so the unattended AUR step ended at that request, after the
+  build, and nothing of the batch was installed. The rest of the batch now goes on. Install the
+  missing packages once by hand (`yay -Sua` asks for them), and the update is built next time. The
+  root shim is unchanged: the hand-over still takes `pacman -U` of checked files and nothing else.
 
 ### Changed in 0.20.09
 
