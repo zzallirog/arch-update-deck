@@ -10,18 +10,24 @@ Before the hand-over the same checks the shim makes run here, so a refusal is
 explained before sudo is asked; the shim makes them again on its own copy. The
 age of each package's AUR entry is read again too: yay cloned the PKGBUILD after
 the run's own look, and an entry that changed in between must not get through.
+
+A package those checks refuse is set aside, not the batch: the others go on to the
+shim, and the refused one is written to LEARNED so later runs do not build it.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 import sys
 import time
 from pathlib import Path
 
-from . import aur_root
+from . import atomic, aur_root
+from .engine import STATE_ROOT
 from .shell import Shell
-from .stores import AUR_RPC
+from .stores import AUR_RPC, BY_HAND, read_by_hand
 
 SHIM = Path("/usr/local/libexec/arch-update-aur-install")
 STAGE = Path.home() / aur_root.STAGE
@@ -29,6 +35,38 @@ REINSTALL = f"sudo install -D -o root -g root -m 0755 {Path(aur_root.__file__)} 
 INSTALL = ["pacman", "-U", "--noconfirm", "--config", "/etc/pacman.conf", "--"]
 # yay marks install reasons after an install; an update keeps the old reason, so these are answered and skipped.
 REASONS = (["pacman", "-D", "-q", "--asexplicit"], ["pacman", "-D", "-q", "--asdeps"])
+LEARNED = STATE_ROOT / BY_HAND
+
+
+def built_version(name: str, package: Path) -> str | None:
+    """The version a package file was built for, read from its name (name-version-arch.pkg.tar.zst), or None."""
+    if not package.name.startswith(f"{name}-"):
+        return None
+    rest = package.name[len(name) + 1 :]
+    version = re.sub(r"-[^-]+\.pkg\.tar(\.\w+)?$", "", rest)
+    return version if version and version != rest else None
+
+
+def staging_problem(package: Path) -> str | None:
+    """Why the shim would not take this file into its stage (its own rules in aur_root), or None."""
+    if not aur_root.PACKAGE.fullmatch(package.name):
+        return "its file name is not one the shim stages (letters, digits and @ . _ + - only, ending .pkg.tar.zst; an epoch colon does not fit)"
+    try:
+        if package.stat().st_size > aur_root.MAX_PACKAGE:
+            return "the file is larger than the shim takes"
+    except OSError as exc:
+        return f"the file cannot be read ({exc.strerror})"
+    return None
+
+
+def remember(refused: dict[str, dict[str, str]]) -> None:
+    """Add the refused packages to LEARNED: the shim's first reason and the version it refused."""
+    known = read_by_hand(LEARNED)
+    known.update(refused)
+    try:
+        atomic.write(LEARNED, json.dumps(known, indent=1, sort_keys=True, ensure_ascii=False))
+    except OSError as exc:  # the list is a convenience: failing to write it must not stop the hand-over
+        print(f"arch-update: could not write {LEARNED}: {exc.strerror}", file=sys.stderr)
 
 
 def held_back(argv: list[str]) -> tuple[list[str], set[str]]:
@@ -69,11 +107,30 @@ def handoff(argv: list[str], min_age_days: float, sh: Shell | None = None) -> in
         print(f"arch-update: an unattended AUR update only installs packages; refused: {' '.join(argv)[:300]}", file=sys.stderr)
         return 1
     files = [Path(path) for path in argv[len(INSTALL) :]]
-    try:
-        installed = aur_root.installed_foreign()
-        names = [aur_root.inspect(path, installed)["name"] for path in files]
-    except aur_root.Refused as refusal:
-        print(f"arch-update: refused, nothing installed:\n{refusal}", file=sys.stderr)
+    installed = aur_root.installed_foreign()
+    passed: dict[Path, str] = {}
+    refused: dict[str, dict[str, str]] = {}
+    for path in files:
+        try:
+            name = aur_root.inspect(path, installed)["name"]
+            if problem := staging_problem(path):
+                raise aur_root.Refused(f"{name}: {problem}")
+            passed[path] = name
+        except aur_root.Refused as refusal:
+            print(f"arch-update: set aside for an update by hand:\n{refusal}", file=sys.stderr)
+            name, _, reason = str(refusal).partition("\n")[0].partition(": ")
+            if name in installed:  # a message that starts with a file name (not a readable package) names no package: set aside for this run only
+                refused[name] = {"why": f"the shim refused it: {reason}"}
+                if version := built_version(name, path):
+                    refused[name]["version"] = version
+    if refused:
+        remember(refused)
+    if len(passed) > aur_root.MAX_FILES:
+        print(f"arch-update: the shim takes {aur_root.MAX_FILES} packages at a time; the rest wait for the next run", file=sys.stderr)
+        passed = dict(list(passed.items())[: aur_root.MAX_FILES])
+    files, names = list(passed), list(passed.values())
+    if not names:
+        print("arch-update: refused, nothing installed", file=sys.stderr)
         return 1
     if held := sorted(ignored.intersection(names)):
         print(f"arch-update: a package this run holds back was built anyway, nothing installed: {', '.join(held)}", file=sys.stderr)

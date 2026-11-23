@@ -1,6 +1,6 @@
 # Reference
 
-Details for [README.md](../README.md), version 0.20.08. Nothing here is needed
+Details for [README.md](../README.md), version 0.20.09. Nothing here is needed
 for a first update; see [START-HERE.md](../START-HERE.md) for that.
 
 ## Requirements
@@ -253,6 +253,22 @@ the timer needs (see [Schedule and ask mode](#schedule-and-ask-mode)).
 
 Other commands exit 0 on success and 1 on an error or a refusal, including an
 unreadable file (2 for a usage error, 130 after Ctrl-C).
+
+### Changed in 0.20.09
+
+- A package the root shim refuses no longer sinks the whole unattended AUR batch. Before the build,
+  a waiting update whose installed version lies outside the places the shim accepts (a Qt plugin, a
+  CUPS filter or a Python module under `usr/lib`) is held with the other updates that wait for a
+  person, as `name: installs usr/lib/qt6, where root reads; the shim refuses that`. At the hand-over,
+  each package is checked on its own: one the shim refuses is set aside, the others go on to the
+  shim, and the refusal is written with the refused version to `aur-by-hand.json` next to the
+  maintainers file in the state folder. Later runs hold that version; a newer one is tried again,
+  and deleting the entry retries at once. A refusal that names a file rather than a package is not
+  remembered. The hand-over also applies the shim's own staging rules before it stages anything: a
+  file name the shim does not accept (a package with an epoch, `name-1:2-1-…`, among them), a file over
+  its size limit, and more packages than it takes at once (32) no longer make the shim refuse the whole
+  stage. An `aur-by-hand.json` that is not a JSON object, or cannot be written, never stops a run.
+  `aur_root.py`, the shim itself, is unchanged, so the installed copy still matches it byte for byte.
 
 ### Changed in 0.20.08
 

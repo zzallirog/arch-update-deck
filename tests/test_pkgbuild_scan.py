@@ -250,6 +250,8 @@ class Look(Aur):
             return CommandResult(argv, 0, "\n".join(self.installed) + "\n")
         if argv == ["pacman", "-Qm"]:
             return CommandResult(argv, 0, "\n".join(f"{n} {v}" for n, v in self.installed.items()) + "\n")
+        if argv[:2] == ["pacman", "-Qlq"]:  # where the installed version lies: an allowed place (stores.root_reads)
+            return CommandResult(argv, 0, f"/usr/\n/usr/bin/\n/usr/bin/{argv[-1]}\n")
         if argv[0] == "vercmp":
             return CommandResult(argv, 0, "1" if argv[1] != argv[2] else "0")
         raise AssertionError(argv)

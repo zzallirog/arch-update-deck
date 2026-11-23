@@ -16,6 +16,8 @@ class Look:
             return CommandResult(argv, 0, "app\nlib\n")
         if argv == ["pacman", "-Qm"]:
             return CommandResult(argv, 0, "app 1\nlib 1\n")
+        if argv[:2] == ["pacman", "-Qlq"]:  # where the installed version lies: an allowed place (stores.root_reads)
+            return CommandResult(argv, 0, f"/usr/\n/usr/bin/\n/usr/bin/{argv[-1]}\n")
         return CommandResult(argv, 0, "1")
 
     def post(self, url, fields):

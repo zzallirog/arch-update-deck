@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import atomic, pkgbuild_scan
+from . import atomic, aur_root, pkgbuild_scan
 from .shell import Shell
 
 AUR_RPC = "https://aur.archlinux.org/rpc/v5/info"
@@ -20,6 +20,8 @@ AUR_MIN_AGE_DAYS = 7
 # A VCS package builds whatever its upstream holds at build time: no age of the AUR entry says anything about that.
 VCS_SUFFIXES = ("-git", "-svn", "-hg", "-bzr", "-darcs", "-cvs", "-nightly")
 MAINTAINERS = "aur-maintainers.json"
+# Packages the root shim refused, with why and the version it refused (written by aur_handoff, next to MAINTAINERS).
+BY_HAND = "aur-by-hand.json"
 
 
 @dataclass(frozen=True)
@@ -59,10 +61,13 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
     Returns the fresh names, and the waiting updates that are never built unasked,
     each as "name: reason": a VCS package, an orphan, and an entry whose
     maintainer changed since the last time it was seen up to date (`state`, a
-    JSON file; an update by hand is what accepts the new maintainer). With `scan`,
-    every other waiting update has its PKGBUILD and .install read first
-    (pkgbuild_scan.py); a red flag in them holds it the same way, with the flag
-    as its reason.
+    JSON file; an update by hand is what accepts the new maintainer). Also never
+    built unasked: an update the root shim would refuse anyway, judged by where the
+    installed version lies (root_reads) or because the shim refused it once
+    (BY_HAND beside `state`; a newer version of the package gets a new try, or delete the entry).
+    With `scan`, every other waiting update has its PKGBUILD and .install read
+    first (pkgbuild_scan.py); a red flag in them holds it the same way, with the
+    flag as its reason.
     """
     foreign = sh.capture(["pacman", "-Qqm"], timeout=60)
     if foreign.returncode not in (0, 1):  # 1: no foreign packages
@@ -85,6 +90,7 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
         seen = json.loads(state.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         seen = {}
+    learned = read_by_hand(state.parent / BY_HAND)
     unsafe: list[str] = []
     to_read: dict[str, list[str]] = {}  # package base -> the waiting names built from it
     for item in results:
@@ -99,6 +105,10 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
             unsafe.append(f"{name}: orphaned in the AUR")
         elif seen.get(base, maintainer) != maintainer:
             unsafe.append(f"{name}: maintainer changed from {seen[base]} to {maintainer}")
+        elif why := set_aside(learned.get(name), str(item.get("Version"))):
+            unsafe.append(f"{name}: {why}")
+        elif where := root_reads(name, installed_paths(sh, name)):
+            unsafe.append(f"{name}: installs {where}, where root reads; the shim refuses that")
         elif scan and name not in fresh:
             to_read.setdefault(base, []).append(name)
         seen.setdefault(base, maintainer)  # first sight: an orphan is kept as None, so an adoption is a change
@@ -107,6 +117,57 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
         unsafe += [f"{name}: {'; '.join(flags)}" for name in waiting if flags]
     atomic.write(state, json.dumps(seen, indent=1, sort_keys=True))
     return fresh, sorted(unsafe)
+
+
+def read_by_hand(path: Path) -> dict:
+    """The set-aside list, or {} when the file is missing, unreadable or not a JSON object: a bad file must not stop a run."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def installed_paths(sh: Shell, name: str) -> list[str]:
+    """What pacman lists for an installed package; nothing when pacman failed (an error line is not a path)."""
+    listing = sh.capture(["pacman", "-Qlq", "--", name], timeout=60)
+    return listing.output.splitlines() if listing.returncode == 0 else []
+
+
+def set_aside(entry: object, candidate: str) -> str | None:
+    """Why a package the shim refused still waits for a person, or None when a newer version deserves a new try.
+
+    An entry is the reason alone (every version waits) or {"why", "version"} (only that version waits: the
+    maintainer may have fixed the layout, and a refusal no longer sinks the batch, so trying again is cheap).
+    """
+    if isinstance(entry, dict) and entry.get("version") in (None, candidate):
+        entry = entry.get("why")
+    elif isinstance(entry, dict):
+        return None
+    if not isinstance(entry, str):
+        return None
+    # The text reaches the screen and the report: control characters (an escape sequence, a line break) are dropped.
+    return "".join(c for c in entry if c.isprintable()) or "set aside after the shim refused it"
+
+
+def root_reads(name: str, paths: list[str]) -> str | None:
+    """The first installed path of `name` outside the shim's allowed places, or None.
+
+    An update lands where the installed version lies: a package with a Qt plugin, a CUPS
+    filter or a Python module there is refused by the shim every time, after the build,
+    and takes the whole batch down with it. Same rules as aur_root.inspect.
+    """
+    folders = aur_root.own_folders(name, paths)
+    for path in paths:
+        clean = path.strip("/")
+        if not clean:
+            continue
+        if path.endswith("/"):
+            if not (aur_root.allowed(clean + "/", folders) or aur_root.ancestor(clean, folders)):
+                return clean
+        elif not aur_root.allowed(clean, folders):
+            return clean
+    return None
 
 
 def _newer(sh: Shell, candidate: str, installed: str) -> bool:

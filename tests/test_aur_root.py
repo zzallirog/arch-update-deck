@@ -6,6 +6,7 @@ import io
 import json
 import tarfile
 import time
+from pathlib import Path
 
 import pytest
 
@@ -177,6 +178,119 @@ def test_the_hand_over_stages_checked_files_and_runs_only_the_shim(hand) -> None
     assert not list((hand / "stage").iterdir()), "the stage is emptied after the shim"
 
 
+def test_the_held_packages_yay_passes_on_do_not_refuse_the_install(hand) -> None:
+    built = package(hand / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    sh = Hand([{"Name": "app-bin", "LastModified": time.time() - 30 * 86400}])
+    seen = []
+    sh.interactive = lambda argv: seen.append(argv) or 0
+    argv = ["pacman", "-U", "--ignore", "darkly-bin", "--ignore=zapzap", *aur_handoff.INSTALL[2:], str(built)]
+    assert aur_handoff.handoff(argv, 7, sh) == 0
+    assert seen == [["sudo", "-n", str(aur_handoff.SHIM)]]
+
+
+def test_a_refused_package_is_set_aside_and_the_rest_still_installs(hand, monkeypatch) -> None:
+    learned = hand / "aur-by-hand.json"
+    monkeypatch.setattr(aur_handoff, "LEARNED", learned)
+    monkeypatch.setattr(aur_root, "installed_foreign", lambda: {**INSTALLED, "style": {**INSTALLED["app-bin"], "paths": []}})
+    good = package(hand / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    plugin = package(hand / "style-2-1-x86_64.pkg.tar.zst", ("usr/lib/qt6/plugins/style.so", "file", {}), name="style")
+    sh = Hand([{"Name": "app-bin", "LastModified": 0}])
+    seen = []
+    sh.interactive = lambda argv: seen.append(sorted(p.name for p in (hand / "stage").iterdir())) or 0
+    assert aur_handoff.handoff([*aur_handoff.INSTALL, str(plugin), str(good)], 7, sh) == 0
+    assert seen == [[good.name]], "only the package that passed reaches the shim"
+    assert json.loads(learned.read_text()) == {"style": {"why": "the shim refused it: usr/lib/qt6/plugins/style.so is outside the allowed places", "version": "2-1"}}
+
+
+def test_a_file_that_is_not_a_package_is_set_aside_for_this_run_only(hand, monkeypatch) -> None:
+    learned = hand / "aur-by-hand.json"
+    monkeypatch.setattr(aur_handoff, "LEARNED", learned)
+    broken = hand / "junk-2-1-x86_64.pkg.tar.zst"
+    broken.write_bytes(b"not an archive")
+    good = package(hand / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    sh = Hand([{"Name": "app-bin", "LastModified": 0}])
+    sh.interactive = lambda argv: 0
+    assert aur_handoff.handoff([*aur_handoff.INSTALL, str(broken), str(good)], 7, sh) == 0
+    assert not learned.exists(), "a refusal that names a file, not a package, is not remembered"
+
+
+STYLE = [("opt", "dir", {}), ("opt/style", "dir", {}), ("opt/style/style", "file", {"mode": 0o755, "data": b"\x7fELF"})]
+
+
+def test_a_package_the_shim_would_not_stage_is_set_aside_before_it_sinks_the_batch(hand, monkeypatch) -> None:
+    learned = hand / "aur-by-hand.json"
+    monkeypatch.setattr(aur_handoff, "LEARNED", learned)
+    monkeypatch.setattr(aur_root, "installed_foreign", lambda: {**INSTALLED, "style": {**INSTALLED["app-bin"], "paths": []}})
+    good = package(hand / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    epoch = package(hand / "style-1:2-1-x86_64.pkg.tar.zst", *STYLE, name="style", version="1:2-1")
+    assert not aur_root.PACKAGE.fullmatch(epoch.name), "the shim cannot stage a file name with an epoch colon"
+    sh = Hand([{"Name": "app-bin", "LastModified": 0}])
+    seen = []
+    sh.interactive = lambda argv: seen.append(sorted(p.name for p in (hand / "stage").iterdir())) or 0
+    assert aur_handoff.handoff([*aur_handoff.INSTALL, str(epoch), str(good)], 7, sh) == 0
+    assert seen == [[good.name]]
+    held = json.loads(learned.read_text())["style"]
+    assert held["version"] == "1:2-1" and "file name" in held["why"]
+
+
+def test_no_more_packages_than_the_shim_takes_are_staged(hand, monkeypatch) -> None:
+    monkeypatch.setattr(aur_root, "MAX_FILES", 1)
+    monkeypatch.setattr(aur_root, "installed_foreign", lambda: {**INSTALLED, "style": {**INSTALLED["app-bin"], "paths": []}})
+    first = package(hand / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    second = package(hand / "style-2-1-x86_64.pkg.tar.zst", *STYLE, name="style")
+    sh = Hand([{"Name": "app-bin", "LastModified": 0}])
+    seen = []
+    sh.interactive = lambda argv: seen.append(sorted(p.name for p in (hand / "stage").iterdir())) or 0
+    assert aur_handoff.handoff([*aur_handoff.INSTALL, str(first), str(second)], 7, sh) == 0
+    assert seen == [[first.name]]
+
+
+@pytest.mark.parametrize("content", ["[]", "null", "5", '"x"', "[" * 200000, "{"])
+def test_a_bad_aur_by_hand_file_does_not_stop_the_review_or_the_hand_over(tmp_path, hand, monkeypatch, content) -> None:
+    (tmp_path / stores.BY_HAND).write_text(content)
+    assert stores.aur_review(Look({"x": "1"}, [entry("x")]), 7, tmp_path / "maintainers.json")[1] == []
+    monkeypatch.setattr(aur_handoff, "LEARNED", tmp_path / stores.BY_HAND)
+    aur_handoff.remember({"x": {"why": "w"}})
+    assert json.loads((tmp_path / stores.BY_HAND).read_text()) == {"x": {"why": "w"}}
+
+
+def test_a_list_that_cannot_be_written_does_not_stop_the_hand_over(hand, monkeypatch) -> None:
+    blocked = hand / "aur-by-hand.json"
+    blocked.mkdir()
+    monkeypatch.setattr(aur_handoff, "LEARNED", blocked)
+    monkeypatch.setattr(aur_root, "installed_foreign", lambda: {**INSTALLED, "style": {**INSTALLED["app-bin"], "paths": []}})
+    good = package(hand / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    plugin = package(hand / "style-2-1-x86_64.pkg.tar.zst", ("usr/lib/qt6/plugins/style.so", "file", {}), name="style")
+    sh = Hand([{"Name": "app-bin", "LastModified": 0}])
+    sh.interactive = lambda argv: 0
+    assert aur_handoff.handoff([*aur_handoff.INSTALL, str(plugin), str(good)], 7, sh) == 0
+
+
+def test_the_reason_of_a_set_aside_entry_reaches_the_screen_without_control_characters(tmp_path) -> None:
+    (tmp_path / stores.BY_HAND).write_text(json.dumps({"x": {"why": "bad\x1b[31m\nred"}, "y": {"why": ""}, "z": ""}))
+    held = stores.aur_review(Look({"x": "1", "y": "1", "z": "1"}, [entry("x"), entry("y"), entry("z")]), 7, tmp_path / "maintainers.json")[1]
+    assert held == ["x: bad[31mred", "y: set aside after the shim refused it", "z: set aside after the shim refused it"]
+
+
+def test_a_failed_pacman_listing_does_not_hold_a_package(tmp_path) -> None:
+    class Failing(Look):
+        def capture(self, argv, timeout=30):
+            from arch_updater.engine import CommandResult
+
+            if argv[:3] == ["pacman", "-Qlq", "--"]:
+                return CommandResult(argv, 1, "error: package 'x' was not found\n")
+            return super().capture(argv, timeout)
+
+    assert stores.aur_review(Failing({"x": "1"}, [entry("x")]), 7, tmp_path / "maintainers.json")[1] == []
+
+
+def test_the_version_is_read_from_the_package_file_name() -> None:
+    read = aur_handoff.built_version
+    assert read("app-bin", Path("/x/app-bin-2.1-3-x86_64.pkg.tar.zst")) == "2.1-3"
+    assert read("app", Path("/x/app-1:4.0-1-any.pkg.tar.xz")) == "1:4.0-1"
+    assert read("app", Path("/x/other-1-1-any.pkg.tar.zst")) is None
+
+
 @pytest.mark.parametrize("argv", [["pacman", "-S", "--asdeps", "--", "x"], ["pacman", "-U", "--overwrite", "*", "--", "x"], ["pacman", "-U", "--noconfirm", "--config", "/etc/pacman.conf", "--"], ["sh", "-c", "id"]])
 def test_the_hand_over_refuses_anything_but_a_plain_install(hand, argv) -> None:
     sh = Hand([])
@@ -237,8 +351,8 @@ def test_a_refused_package_never_reaches_sudo(hand) -> None:
 
 
 class Look:
-    def __init__(self, installed, results):
-        self.installed, self.results = installed, results
+    def __init__(self, installed, results, paths=None):
+        self.installed, self.results, self.paths = installed, results, paths or {}
 
     def capture(self, argv, timeout=30):
         from arch_updater.engine import CommandResult
@@ -249,6 +363,8 @@ class Look:
             return CommandResult(argv, 0, "\n".join(f"{n} {v}" for n, v in self.installed.items()) + "\n")
         if argv[0] == "vercmp":
             return CommandResult(argv, 0, "1" if argv[1] != argv[2] else "0")
+        if argv[:3] == ["pacman", "-Qlq", "--"]:
+            return CommandResult(argv, 0, "".join(f"{path}\n" for path in self.paths.get(argv[3], ["/opt/", f"/opt/{argv[3]}"])))
         raise AssertionError(argv)
 
     def post(self, url, fields):
@@ -267,6 +383,37 @@ def test_vcs_orphans_and_new_maintainers_wait_for_a_person(tmp_path) -> None:
     assert fresh == []
     assert unsafe == ["foo-git: VCS package, builds whatever upstream has now", "orphan: orphaned in the AUR", "taken: maintainer changed from alice to mallory"]
     assert json.loads(state.read_text()) == {"foo-git": "alice", "ok": "alice", "orphan": None, "same": "bob", "taken": "alice"}
+
+
+def test_an_update_the_shim_would_refuse_is_never_built_unasked(tmp_path) -> None:
+    state = tmp_path / "maintainers.json"
+    paths = {"style": ["/usr/", "/usr/lib/", "/usr/lib/qt6/", "/usr/lib/qt6/plugins/", "/usr/lib/qt6/plugins/style.so"],
+             "driver": ["/usr/", "/usr/lib/", "/usr/lib/cups/", "/usr/lib/cups/filter/", "/usr/lib/cups/filter/rastertoescpx"],
+             "app-bin": ["/opt/", "/opt/app/", "/opt/app/app", "/usr/", "/usr/bin/", "/usr/bin/app", "/usr/share/", "/usr/share/applications/", "/usr/share/applications/app.desktop", "/usr/lib/", "/usr/lib/app/", "/usr/lib/app/data"]}
+    look = Look({name: "1" for name in paths}, [entry(name) for name in paths], paths)
+    assert stores.aur_review(look, 7, state)[1] == [
+        "driver: installs usr/lib/cups, where root reads; the shim refuses that",
+        "style: installs usr/lib/qt6, where root reads; the shim refuses that",
+    ]
+
+
+def test_a_package_the_shim_refused_once_waits_for_a_person(tmp_path) -> None:
+    state = tmp_path / "maintainers.json"
+    (tmp_path / stores.BY_HAND).write_text(json.dumps({"x": "the shim refused it: has an install script"}))
+    assert stores.aur_review(Look({"x": "1"}, [entry("x")]), 7, state)[1] == ["x: the shim refused it: has an install script"]
+
+
+def test_a_refusal_holds_the_refused_version_only(tmp_path) -> None:
+    state = tmp_path / "maintainers.json"
+    (tmp_path / stores.BY_HAND).write_text(json.dumps({"x": {"why": "the shim refused it: has an install script", "version": "2-1"}}))
+    assert stores.aur_review(Look({"x": "1"}, [entry("x", version="2-1")]), 7, state)[1] == ["x: the shim refused it: has an install script"]
+    assert stores.aur_review(Look({"x": "1"}, [entry("x", version="3-1")]), 7, state)[1] == [], "a newer version is tried again"
+
+
+def test_an_entry_without_a_version_holds_every_version(tmp_path) -> None:
+    state = tmp_path / "maintainers.json"
+    (tmp_path / stores.BY_HAND).write_text(json.dumps({"x": {"why": "old entry"}, "y": 42}))
+    assert stores.aur_review(Look({"x": "1", "y": "1"}, [entry("x", version="9-1"), entry("y")]), 7, state)[1] == ["x: old entry"]
 
 
 def test_an_update_by_hand_accepts_the_new_maintainer(tmp_path) -> None:
