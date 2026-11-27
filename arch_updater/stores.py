@@ -65,7 +65,7 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
     built unasked: an update the root shim would refuse anyway, judged by where the
     installed version lies (root_reads) or because the shim refused it once
     (BY_HAND beside `state`; a newer version of the package gets a new try, or delete the entry),
-    or an update with a dependency that is not installed and that no repository has.
+    or an update with a dependency that is not installed and that the shim cannot take (a plain repository name only).
     With `scan`, every other waiting update has its PKGBUILD and .install read
     first (pkgbuild_scan.py); a red flag in them holds it the same way, with the
     flag as its reason.
@@ -109,7 +109,7 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
         elif why := set_aside(learned.get(name), str(item.get("Version"))):
             unsafe.append(f"{name}: {why}")
         elif missing := missing_dependencies(sh, item):
-            unsafe.append(f"{name}: needs {', '.join(missing[:6])}{' and more' if len(missing) > 6 else ''} installed first (no repository has it)")
+            unsafe.append(f"{name}: needs {', '.join(missing[:6])}{' and more' if len(missing) > 6 else ''} installed first (the root shim takes only plain repository names)")
         elif where := root_reads(name, installed_paths(sh, name)):
             unsafe.append(f"{name}: installs {where}, where root reads; the shim refuses that")
         elif scan and name not in fresh:
@@ -123,10 +123,12 @@ def aur_review(sh: Shell, min_age_days: float, state: Path | None = None, scan: 
 
 
 def missing_dependencies(sh: Shell, item: dict) -> list[str]:
-    """What the AUR entry lists as depends, makedepends and checkdepends that is not installed and that no repository has (pacman -T, -Sp).
+    """What the AUR entry lists as depends, makedepends and checkdepends that is not installed and that the shim cannot install (pacman -T, -Si).
 
-    A repository package is installed by the hand-over (the shim's repo-deps). Another AUR package would be
-    built and handed over as a new install, which the shim refuses: the batch would end after the build.
+    The shim takes a repository package only by a plain name that a sync database holds under that name (pacman -Si):
+    a version range (libfoo>=2) or a name that only another package provides is refused, so it counts as missing.
+    Another AUR package would be built and handed over as a new install, which the shim refuses too. The hand-over
+    installs updates only: the batch would end after the build, at that request.
     An answer that is not "all present" or "these are missing" counts as "nothing missing".
     """
     wanted = [dep for key in ("Depends", "MakeDepends", "CheckDepends") for dep in (item.get(key) or []) if isinstance(dep, str)]
@@ -135,7 +137,7 @@ def missing_dependencies(sh: Shell, item: dict) -> list[str]:
     answer = sh.capture(["pacman", "-T", "--", *wanted], timeout=60)
     if answer.returncode != 127:
         return []
-    return [dep for dep in answer.output.split() if sh.capture(["pacman", "-Sp", "--print-format", "%n", "--", dep], timeout=60).returncode != 0]
+    return [dep for dep in answer.output.split() if not (aur_root.DEP_NAME.fullmatch(dep) and sh.capture(["pacman", "-Si", "--", dep], timeout=60).returncode == 0)]
 
 
 def read_by_hand(path: Path) -> dict:

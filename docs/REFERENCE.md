@@ -263,8 +263,10 @@ unreadable file (2 for a usage error, 130 after Ctrl-C).
   again (`sudo install -D -o root -g root -m 0755 ... /usr/local/libexec/arch-update-aur-install`;
   the message prints the exact command). `arch-update auto --sudoers --aur` says in its
   description of the rule what the shim now does. The sudoers line is unchanged.
-- The hold from 0.20.10 now covers only a dependency no repository has (another AUR package),
-  not one the shim installs: `needs libfoo installed first (no repository has it)`.
+- The hold from 0.20.10 covers every dependency the shim cannot install: another AUR package,
+  a version range (`libfoo>=2`), or a name only another package provides. A plain repository
+  name that a sync database holds by that name is installed by the shim, so it does not hold the
+  update: `needs libfoo>=2 installed first (the root shim takes only plain repository names)`.
 - The shim leaves alone a package that is installed, one `IgnorePkg` or `IgnoreGroup` holds
   back, and one that replaces another. It installs new packages only, so it never upgrades
   by itself; a repository dependency of a new package can still be upgraded by pacman, as with

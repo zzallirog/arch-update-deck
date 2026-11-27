@@ -281,7 +281,22 @@ def test_only_a_dependency_no_repository_has_holds_an_update(tmp_path) -> None:
     plain = {**entry("ok"), "Depends": ["qt6-base"]}
     look = Look({"zap": "1", "fine": "1", "ok": "1"}, [needy, repo_only, plain], absent=["python-build", "libaur-only"], aur_only=["libaur-only"])
     held = stores.aur_review(look, 7, tmp_path / "maintainers.json")[1]
-    assert held == ["zap: needs libaur-only>=2 installed first (no repository has it)"], "python-build comes from a repository: the shim installs it"
+    assert held == ["zap: needs libaur-only>=2 installed first (the root shim takes only plain repository names)"], "python-build comes from a repository: the shim installs it"
+
+
+def test_a_dependency_the_shim_cannot_take_holds_an_update_before_the_build(tmp_path) -> None:
+    class Offered(Look):
+        def capture(self, argv, timeout=30):
+            from arch_updater.engine import CommandResult
+
+            if argv[:2] == ["pacman", "-Sp"]:  # a repository offers it through a range or a provider, yet the shim takes plain names only
+                return CommandResult(argv, 0, "")
+            return super().capture(argv, timeout)
+
+    needy = {**entry("zap"), "Depends": ["ranged>=2", "java-runtime"]}
+    look = Offered({"zap": "1"}, [needy], absent=["ranged", "java-runtime"], aur_only=["java-runtime"])
+    held = stores.aur_review(look, 7, tmp_path / "maintainers.json")[1]
+    assert held == ["zap: needs ranged>=2, java-runtime installed first (the root shim takes only plain repository names)"]
 
 
 def test_pacman_not_answering_about_dependencies_holds_nothing(tmp_path) -> None:
@@ -575,8 +590,8 @@ class Look:
             return CommandResult(argv, 0, "\n".join(f"{n} {v}" for n, v in self.installed.items()) + "\n")
         if argv[0] == "vercmp":
             return CommandResult(argv, 0, "1" if argv[1] != argv[2] else "0")
-        if argv[:2] == ["pacman", "-Sp"]:
-            return CommandResult(argv, 1 if argv[-1].split(">")[0].split("<")[0].split("=")[0] in self.aur_only else 0, "")
+        if argv[:2] == ["pacman", "-Si"]:
+            return CommandResult(argv, 1 if argv[-1] in self.aur_only else 0, "")
         if argv[:3] == ["pacman", "-T", "--"]:
             missing = [dep for dep in argv[3:] if dep.split(">")[0].split("<")[0].split("=")[0] in self.absent]
             return CommandResult(argv, 127 if missing else 0, "".join(f"{dep}\n" for dep in missing))
