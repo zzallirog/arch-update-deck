@@ -139,7 +139,7 @@ def test_the_shim_copies_without_following_a_link(tmp_path) -> None:
     (stage / "x.pkg.tar.zst").symlink_to("/etc/hostname")
     fd = aur_root.os.open(stage, aur_root.os.O_RDONLY | aur_root.os.O_DIRECTORY)
     try:
-        with pytest.raises(OSError):
+        with pytest.raises(aur_root.Refused):
             aur_root.take(fd, "x.pkg.tar.zst", into)
     finally:
         aur_root.os.close(fd)
@@ -381,6 +381,13 @@ def test_a_failed_dependency_install_stops_before_the_packages(root_shim) -> Non
     package(root_shim.stage / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
     assert aur_root.main() == 1
     assert [call[1] for call in root_shim.calls] == ["-Si", "-Qq", "-S"]
+
+
+def test_a_staged_link_is_refused_with_a_message_not_a_traceback(root_shim, tmp_path) -> None:
+    target = package(tmp_path / "real-2-1-x86_64.pkg.tar.zst", *GOOD)
+    (root_shim.stage / "app-bin-2-1-x86_64.pkg.tar.zst").symlink_to(target)
+    assert aur_root.main() == 2
+    assert root_shim.calls == [], "nothing was asked of pacman"
 
 
 @pytest.mark.parametrize("text", ["--needed\n", "git extra\n", "git;id\n", "../git\n", "extra/Git\n", "\n", "x/y/z\n", "git>=2\n", "-S\n"])

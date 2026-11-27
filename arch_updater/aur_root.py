@@ -251,7 +251,10 @@ def installed_foreign() -> dict[str, dict]:
 
 def take(stage_fd: int, entry: str, into: Path) -> Path:
     """Copy one staged file into root's folder without following a link and without reading it twice."""
-    fd = os.open(entry, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=stage_fd)
+    try:
+        fd = os.open(entry, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=stage_fd)
+    except OSError as exc:  # a link (ELOOP) or a folder that cannot be read: refused, not a traceback
+        raise Refused(f"{entry}: not a regular file ({exc.strerror})") from None
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_PACKAGE:
