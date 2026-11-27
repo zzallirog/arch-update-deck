@@ -301,14 +301,15 @@ def pacman_list(*argv: str) -> set[str]:
     return set(result.stdout.split())
 
 
-def sync_check(names: list[str]) -> None:
-    """Refuse unless every name is a package of a sync database that replaces nothing (a replacement would swap an installed package unasked)."""
-    env = {"PATH": "/usr/bin", "LANG": "C.UTF-8"}
-    answer = subprocess.run(["/usr/bin/pacman", "-Si", "--config", "/etc/pacman.conf", "--", *names], env=env, cwd="/", capture_output=True, text=True)
-    if answer.returncode != 0:
-        raise Refused(f"{DEPS}: not all in a sync database: {(answer.stderr.strip().splitlines() or ['pacman failed'])[0][:200]}")
+def sync_problems(names: list[str], info: str, pinned: set[str], pinned_groups: set[str]) -> list[str]:
+    """Why each name cannot be taken as a dependency, from the text of `pacman -Si` and the IgnorePkg / IgnoreGroup words.
+
+    The one decision both the shim and the review before a build use, so they cannot drift apart.
+    A name is refused when no sync database holds it (in the named one, for repo/name), when the entry
+    replaces something, or when pacman.conf holds it back.
+    """
     found: dict[str, list[dict[str, str]]] = {}
-    for block in answer.stdout.split("\n\n"):
+    for block in info.split("\n\n"):
         fields: dict[str, str] = {}
         for line in block.splitlines():
             key, sep, value = line.partition(":")
@@ -316,8 +317,6 @@ def sync_check(names: list[str]) -> None:
                 fields.setdefault(key.strip(), value.strip())
         if "Name" in fields:
             found.setdefault(fields["Name"], []).append(fields)
-    pinned = pacman_list("/usr/bin/pacman-conf", "--config", "/etc/pacman.conf", "IgnorePkg")
-    pinned_groups = pacman_list("/usr/bin/pacman-conf", "--config", "/etc/pacman.conf", "IgnoreGroup")
     problems = []
     for entry in names:
         repo, _, name = entry.rpartition("/")
@@ -328,6 +327,18 @@ def sync_check(names: list[str]) -> None:
             problems.append(f"{entry}: replaces {blocks[0].get('Replaces')}")
         elif name in pinned or pinned_groups & {g for b in blocks for g in b.get("Groups", "None").split()}:
             problems.append(f"{entry}: pacman.conf holds it back (IgnorePkg or IgnoreGroup)")
+    return problems
+
+
+def sync_check(names: list[str]) -> None:
+    """Refuse unless every name is a package of a sync database that replaces nothing (a replacement would swap an installed package unasked)."""
+    env = {"PATH": "/usr/bin", "LANG": "C.UTF-8"}
+    answer = subprocess.run(["/usr/bin/pacman", "-Si", "--config", "/etc/pacman.conf", "--", *names], env=env, cwd="/", capture_output=True, text=True)
+    if answer.returncode != 0:
+        raise Refused(f"{DEPS}: not all in a sync database: {(answer.stderr.strip().splitlines() or ['pacman failed'])[0][:200]}")
+    pinned = pacman_list("/usr/bin/pacman-conf", "--config", "/etc/pacman.conf", "IgnorePkg")
+    pinned_groups = pacman_list("/usr/bin/pacman-conf", "--config", "/etc/pacman.conf", "IgnoreGroup")
+    problems = sync_problems(names, answer.stdout, pinned, pinned_groups)
     if problems:
         raise Refused("\n".join(problems))
 

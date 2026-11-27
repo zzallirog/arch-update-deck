@@ -128,7 +128,9 @@ def missing_dependencies(sh: Shell, item: dict) -> list[str]:
     The shim takes a repository package only by a plain name that a sync database holds under that name (pacman -Si):
     a version range (libfoo>=2) or a name that only another package provides is refused, so it counts as missing.
     Another AUR package would be built and handed over as a new install, which the shim refuses too. The hand-over
-    installs updates only: the batch would end after the build, at that request.
+    installs updates only: the batch would end after the build, at that request. A repository package the shim
+    would refuse (it replaces something, or IgnorePkg / IgnoreGroup holds it) counts as missing too: the decision
+    is aur_root.sync_problems, the shim's own.
     An answer that is not "all present" or "these are missing" counts as "nothing missing".
     """
     wanted = [dep for key in ("Depends", "MakeDepends", "CheckDepends") for dep in (item.get(key) or []) if isinstance(dep, str)]
@@ -137,7 +139,24 @@ def missing_dependencies(sh: Shell, item: dict) -> list[str]:
     answer = sh.capture(["pacman", "-T", "--", *wanted], timeout=60)
     if answer.returncode != 127:
         return []
-    return [dep for dep in answer.output.split() if not (aur_root.DEP_NAME.fullmatch(dep) and sh.capture(["pacman", "-Si", "--", dep], timeout=60).returncode == 0)]
+    held: tuple[set[str], set[str]] | None = None
+    missing = []
+    for dep in answer.output.split():
+        info = sh.capture(["pacman", "-Si", "--", dep], timeout=60) if aur_root.DEP_NAME.fullmatch(dep) else None
+        if info is None or info.returncode != 0:
+            missing.append(dep)
+            continue
+        if held is None:  # read once, and only when a repository package is in question; unreadable counts as "nothing held"
+            held = (conf_words(sh, "IgnorePkg"), conf_words(sh, "IgnoreGroup"))
+        if aur_root.sync_problems([dep], info.output, *held):
+            missing.append(dep)
+    return missing
+
+
+def conf_words(sh: Shell, option: str) -> set[str]:
+    """The words pacman.conf lists under `option`, or none when pacman-conf fails (the shim refuses then; the review does not guess)."""
+    answer = sh.capture(["pacman-conf", option], timeout=60)
+    return set(answer.output.split()) if answer.returncode == 0 else set()
 
 
 def read_by_hand(path: Path) -> dict:

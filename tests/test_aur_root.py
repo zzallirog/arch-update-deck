@@ -299,6 +299,13 @@ def test_a_dependency_the_shim_cannot_take_holds_an_update_before_the_build(tmp_
     assert held == ["zap: needs ranged>=2, java-runtime installed first (the root shim takes only plain repository names)"]
 
 
+def test_a_dependency_the_shim_refuses_for_a_replacement_or_an_ignore_list_holds_an_update(tmp_path) -> None:
+    needy = {**entry("zap"), "Depends": ["swaps", "pinned", "grouped", "plain"]}
+    look = Look({"zap": "1"}, [needy], absent=["swaps", "pinned", "grouped", "plain"], replacing=["swaps"], groups={"grouped": "held-group other"}, ignore_pkg=["pinned"], ignore_group=["held-group"])
+    held = stores.aur_review(look, 7, tmp_path / "maintainers.json")[1]
+    assert held == ["zap: needs swaps, pinned, grouped installed first (the root shim takes only plain repository names)"], "plain is taken by the shim"
+
+
 def test_pacman_not_answering_about_dependencies_holds_nothing(tmp_path) -> None:
     class Odd(Look):
         def capture(self, argv, timeout=30):
@@ -587,8 +594,9 @@ def test_a_refused_package_never_reaches_sudo(hand) -> None:
 
 
 class Look:
-    def __init__(self, installed, results, paths=None, absent=(), aur_only=()):
+    def __init__(self, installed, results, paths=None, absent=(), aur_only=(), replacing=(), groups=None, ignore_pkg=(), ignore_group=()):
         self.installed, self.results, self.paths, self.absent, self.aur_only = installed, results, paths or {}, set(absent), set(aur_only)
+        self.replacing, self.groups, self.ignore = set(replacing), groups or {}, {"IgnorePkg": list(ignore_pkg), "IgnoreGroup": list(ignore_group)}
 
     def capture(self, argv, timeout=30):
         from arch_updater.engine import CommandResult
@@ -600,7 +608,11 @@ class Look:
         if argv[0] == "vercmp":
             return CommandResult(argv, 0, "1" if argv[1] != argv[2] else "0")
         if argv[:2] == ["pacman", "-Si"]:
-            return CommandResult(argv, 1 if argv[-1] in self.aur_only else 0, "")
+            name = argv[-1]
+            info = f"Repository      : extra\nName            : {name}\nGroups          : {self.groups.get(name, 'None')}\nReplaces        : {'oldfoo' if name in self.replacing else 'None'}\n"
+            return CommandResult(argv, 1 if name in self.aur_only else 0, "" if name in self.aur_only else info)
+        if argv[0] == "pacman-conf" and argv[1] in self.ignore:
+            return CommandResult(argv, 0, "".join(f"{word}\n" for word in self.ignore[argv[1]]))
         if argv[:3] == ["pacman", "-T", "--"]:
             missing = [dep for dep in argv[3:] if dep.split(">")[0].split("<")[0].split("=")[0] in self.absent]
             return CommandResult(argv, 127 if missing else 0, "".join(f"{dep}\n" for dep in missing))
