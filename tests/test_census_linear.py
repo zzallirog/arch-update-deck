@@ -35,13 +35,33 @@ def test_the_pattern_the_first_pass_wrote_is_not_used_at_all_and_costs_nothing()
     assert took(lambda: case.matches("\n".join([LOOKALIKE] * 80))) < 0.5 and not case.matches(COPY)
 
 
+def least(call, runs: int = 5, reps: int = 1) -> float:
+    """The cheapest of `runs` measurements of `reps` calls: a load spike inflates some runs, never every one."""
+    return min(took(lambda: [call() for _ in range(reps)]) for _ in range(runs))
+
+
+def shapes(units: int) -> list[str]:
+    """The tokens that hurt a greedy group: a long hyphen chain, a long run, a long run of short words."""
+    return ["x and " + "a-" * units + "9-9 zzz", "x and a" + "-1" * units, "a" * 2 * units, "a-1 " * (units // 2)]
+
+
 def test_the_witnessed_group_on_a_16_kb_token_is_fast() -> None:
+    # Measured against the machine's own speed, not a fixed number of seconds: a busy machine slows both sides alike.
+    # The old group is quadratic on its own; what keeps it cheap is the cut of each line (4000 characters at the time of
+    # writing), so the 16 KB token must cost what the same group costs on 4000 characters, not on 16 KB (16 times more).
     old = census.Case(id="LOCAL-WITNESSED-1", match=OLD_GROUP)
-    for token in ("x and " + "a-" * 8000 + "9-9 zzz", "x and a" + "-1" * 8000):
-        assert took(lambda: old.matches(token)) < 0.5, "the old group took 8 s"
+    for token in shapes(8000):
+        cut = least(lambda: re.search(OLD_GROUP, token[:4000]), runs=3)
+        assert least(lambda: old.matches(token), runs=3) < 3 * cut + 0.02, "the old group took 8 s: the line is no longer cut"
+    # The witnessed group is linear: four times the line costs about four times as much (a quadratic one, sixteen).
     new = witness.generalize(":: foo-1-1 and bar-2-1 are in conflict. Remove bar? [y/N]\n", ["bar"])
     case = census.Case(id="LOCAL-WITNESSED-2", match=new.match, fix="sudo pacman -R bar", generic="sudo pacman -R {pkg}")
-    for token in ("x and " + "a-" * 8000 + "9-9 zzz", "x and a" + "-1" * 8000, "a" * 16384, "a-1 " * 4000):
+    quarter = census.LINE_CHARS // 8  # units of 2 characters: a line a quarter as long as the cut one
+    for short, long in zip(shapes(quarter), shapes(census.LINE_CHARS // 2)):
+        assert len(long) >= census.LINE_CHARS > 3 * len(short)
+        for call in (case.matches, case.fix_for):
+            assert least(lambda: call(long), reps=20) < 8 * least(lambda: call(short), reps=20) + 0.02, "the witnessed group grows faster than the line"
+    for token in shapes(8000):
         assert took(lambda: case.matches(token)) < 0.5 and took(lambda: case.fix_for(token)) < 0.5
 
 
