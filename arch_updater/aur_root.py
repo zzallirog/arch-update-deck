@@ -372,11 +372,11 @@ def main() -> int:
         if names:
             print("checked: " + "; ".join(names), flush=True)
         env = {"PATH": "/usr/bin", "LANG": "C.UTF-8"}
-        if wanted:
-            sync_check(wanted)
+        if wanted:  # an installed dependency is left alone: it is neither checked nor asked for
             have = pacman_list("/usr/bin/pacman", "-Qq")
             wanted = [entry for entry in wanted if entry.rpartition("/")[2] not in have]
         if wanted:
+            sync_check(wanted)
             print("repository packages: " + ", ".join(wanted), flush=True)
             asked = subprocess.run(["/usr/bin/pacman", "-S", "--asdeps", "--needed", "--noconfirm", "--config", "/etc/pacman.conf", "--", *wanted], env=env, cwd="/")
             if asked.returncode != 0:

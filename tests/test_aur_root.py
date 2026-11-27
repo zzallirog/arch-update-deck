@@ -379,7 +379,7 @@ def root_shim(tmp_path, monkeypatch):
 def test_the_shim_installs_the_repository_packages_of_a_build_as_dependencies(root_shim) -> None:
     (root_shim.stage / "repo-deps").write_text("extra/python-build\ngit\n")
     assert aur_root.main() == 0
-    assert root_shim.calls == [["/usr/bin/pacman", "-Si", "--config", "/etc/pacman.conf", "--", "extra/python-build", "git"], ["/usr/bin/pacman", "-Qq"],
+    assert root_shim.calls == [["/usr/bin/pacman", "-Qq"], ["/usr/bin/pacman", "-Si", "--config", "/etc/pacman.conf", "--", "extra/python-build", "git"],
                                ["/usr/bin/pacman", "-S", "--asdeps", "--needed", "--noconfirm", "--config", "/etc/pacman.conf", "--", "extra/python-build", "git"]]
 
 
@@ -387,7 +387,7 @@ def test_the_shim_installs_the_dependencies_before_the_packages(root_shim) -> No
     (root_shim.stage / "repo-deps").write_text("git\n")
     package(root_shim.stage / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
     assert aur_root.main() == 0
-    assert [call[1] for call in root_shim.calls] == ["-Si", "-Qq", "-S", "-U"]
+    assert [call[1] for call in root_shim.calls] == ["-Qq", "-Si", "-S", "-U"]
 
 
 def test_a_failed_dependency_install_stops_before_the_packages(root_shim) -> None:
@@ -395,7 +395,16 @@ def test_a_failed_dependency_install_stops_before_the_packages(root_shim) -> Non
     (root_shim.stage / "repo-deps").write_text("git\n")
     package(root_shim.stage / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
     assert aur_root.main() == 1
-    assert [call[1] for call in root_shim.calls] == ["-Si", "-Qq", "-S"]
+    assert [call[1] for call in root_shim.calls] == ["-Qq", "-Si", "-S"]
+
+
+def test_a_dependency_already_installed_is_left_alone_even_when_no_sync_database_holds_it(root_shim) -> None:
+    (root_shim.stage / "repo-deps").write_text("git\n")
+    root_shim.installed = ["git"]
+    root_shim.info_rc = 1  # no sync database holds that name under it
+    package(root_shim.stage / "app-bin-2-1-x86_64.pkg.tar.zst", *GOOD)
+    assert aur_root.main() == 0
+    assert not [call for call in root_shim.calls if call[1] == "-S"], "an installed dependency is never asked for again"
 
 
 def test_a_staged_link_is_refused_with_a_message_not_a_traceback(root_shim, tmp_path) -> None:
