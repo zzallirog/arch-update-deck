@@ -3,4 +3,5 @@ set -eu
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 share_dir=${ARCH_UPDATER_HOME:-"$script_dir/../share/arch-update-deck"}
-exec env PYTHONPATH="$share_dir${PYTHONPATH:+:$PYTHONPATH}" python3 -m arch_updater "$@"
+# -P: the folder the command is started from is not searched first, so a package there cannot stand in for the installed one.
+exec env PYTHONPATH="$share_dir${PYTHONPATH:+:$PYTHONPATH}" python3 -P -m arch_updater "$@"
